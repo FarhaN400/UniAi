@@ -1,7 +1,7 @@
 from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 from dotenv import load_dotenv
 from ocr import ocr_extract_pdf
-from prompt import notice_extraction_prompt , parser
+from prompt import notice_extraction_prompt as prompt , parser
 
 load_dotenv()
 
@@ -12,9 +12,9 @@ llm = HuggingFaceEndpoint(
 
 model = ChatHuggingFace(llm=llm)
 
-docs = ocr_extract_pdf('wbjee.pdf')
+docs = ocr_extract_pdf('table.pdf')
 
-chain = notice_extraction_prompt | model | parser
+chain = prompt | model | parser
 
 result = chain.invoke({"text": docs})
 
