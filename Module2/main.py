@@ -16,6 +16,10 @@ client = MongoClient(MONGO_URI)
 db = client["university_assistant"]
 collection = db["university_documents"]
 
+
+class InvalidPDFError(ValueError):
+    pass
+
 # --- 2. Existing LLM Chain ---
 llm = HuggingFaceEndpoint(
     repo_id='openai/gpt-oss-120b',
@@ -28,6 +32,8 @@ chain = prompt | model | parser
 def download_pdf(url, save_path="temp_notice.pdf"):
     response = requests.get(url, timeout=20)
     response.raise_for_status()
+    if not response.content.startswith(b"%PDF-"):
+        raise InvalidPDFError(f"File contains invalid syntax. PDF URL: {url}")
     with open(save_path, "wb") as f:
         f.write(response.content)
     return save_path
@@ -104,6 +110,17 @@ def process_new_notices(limit=None):
 
         except Exception as error:
             failed_count += 1
+            if isinstance(error, InvalidPDFError):
+                collection.update_one(
+                    {"notice_id": notice_id},
+                    {
+                        "$set": {
+                            "status": "invalid",
+                            "processing_error": str(error),
+                            "invalid_pdf_url": pdf_url
+                        }
+                    }
+                )
             print(f"  -> ERROR: Failed to process notice.")
             print(f"     Reason: {error}")
             print(f"     Status remains 'new' (will not be marked 'processed').")
