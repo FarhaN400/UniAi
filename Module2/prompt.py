@@ -34,7 +34,8 @@ Rules:
 - "important_dates" refers ONLY to deadlines or event windows explicitly mentioned for an action (e.g. exam form submission, application period). Do NOT use the notice's issue/effective date here — that belongs in "issue_date" only.
 - "key_points" should always be an array, even if there is only one point.
 - Return ONLY the JSON object. No explanations, no markdown code fences, no extra text before or after.
-- Copy all numbers, times, dates, and figures EXACTLY as written in the source text. Never round, "correct," or reinterpret a number based on what seems more common or plausible — use precisely what appears in the notice, even if it looks unusual.
+- Copy all numbers, times, dates, and figures accurately as stated in the notice.
+- The input text may come from OCR and could contain optical misrecognitions (for example: "JJ a.m.", "Il a.m.", or "1l a.m." for "11 a.m.", or "O" for "0"). Resolve obvious OCR character substitutions for times, dates, and numbers rather than guessing or defaulting to common assumptions like 9 a.m. or 10 a.m. Do not invent dates or times not present in the text.
 
 NOTICE TEXT:
 {text}

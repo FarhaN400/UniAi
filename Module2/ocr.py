@@ -12,6 +12,13 @@ def ocr_extract_pdf(pdf_path):
 
 
 def clean_ocr_text(text):
+    # Fix common OCR misrecognitions of '11' before am/pm (e.g. JJ a.m., J/ a.m., J] a.m., Il a.m., 1l a.m., II a.m., ll a.m.)
+    text = re.sub(r'(?i)\b(JJ|J/|J\]|Il|1l|II|ll)\s*([ap]\.?m\.?)', r'11 \2', text)
+    # Fix single 'l' or 'I' misrecognized as 1 or 11 after 'between' or 'from'
+    text = re.sub(r'(?i)\b(between|from)\s+[lI]\s*([ap]\.?m\.?)', r'\1 11 \2', text)
+    # Fix missing spaces before digits in time ranges, e.g. 'to4 p.m.' -> 'to 4 p.m.'
+    text = re.sub(r'(?i)\bto(\d+)\s*([ap]\.?m\.?)', r'to \1 \2', text)
+
     lines = text.split("\n")
     cleaned = []
     for line in lines:
