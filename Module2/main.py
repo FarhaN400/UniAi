@@ -12,7 +12,7 @@ llm = HuggingFaceEndpoint(
 
 model = ChatHuggingFace(llm=llm)
 
-docs = ocr_extract_pdf('table.pdf')
+docs = ocr_extract_pdf('eg2.pdf')
 
 chain = prompt | model | parser
 

@@ -2,9 +2,11 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import hashlib
-from pymongo import MongoClient 
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
@@ -78,34 +80,41 @@ def store_notice(notice):
 # --- Step 7: compare + report ---
 
 def run_monitor_cycle():
-    print("Checking university portal...\n")
+    try:
+        print("Checking university portal...\n")
 
-    scraped_notices = get_makautwb_notices()
-    scraped_notices = [add_notice_id(n) for n in scraped_notices]
+        scraped_notices = get_makautwb_notices()
+        scraped_notices = [add_notice_id(n) for n in scraped_notices]
 
-    new_count = 0
-    new_notices = []
+        new_count = 0
+        new_notices = []
 
-    for notice in scraped_notices:
-        is_new = store_notice(notice)
-        if is_new:
-            new_count += 1
-            new_notices.append(notice)
+        for notice in scraped_notices:
+            is_new = store_notice(notice)
+            if is_new:
+                new_count += 1
+                new_notices.append(notice)
 
-    total_found = len(scraped_notices)
-    existing_count = total_found - new_count
+        total_found = len(scraped_notices)
+        existing_count = total_found - new_count
 
-    print(f"Found {total_found} notices on the page.")
-    print(f"Existing notices: {existing_count}")
-    print(f"New notices: {new_count}\n")
+        print(f"Found {total_found} notices on the page.")
+        print(f"Existing notices: {existing_count}")
+        print(f"New notices: {new_count}\n")
 
-    if new_notices:
-        print("NEW:")
-        for n in new_notices:
-            print(f"- {n['title']}")
-            print(f"  {n['url']}")
-    else:
-        print("No new notices this run.")
+        if new_notices:
+            print("NEW:")
+            for n in new_notices:
+                print(f"- {n['title']}")
+                print(f"  {n['url']}")
+        else:
+            print("No new notices this run.")
+    except requests.RequestException as error:
+        print(f"Failed to fetch notices: {error}")
+    except PyMongoError as error:
+        print(f"Database error: {error}")
+    except Exception as error:
+        print(f"Unexpected error: {error}")
 
 
 if __name__ == "__main__":
