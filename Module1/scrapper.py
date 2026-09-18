@@ -12,6 +12,9 @@ load_dotenv()
 
 BASE_URL = "https://makautwb.ac.in/"
 NOTICE_PAGE = "https://makautwb.ac.in/page.php?id=340"
+INVALID_NOTICE_IDS = {
+    "a9dd4d2604d2a16028d40a7213745cb93ddef51fe8eb44877b3c75ab5b2af333"
+}
 
 # --- MongoDB connection ---
 # Local MongoDB (default):
@@ -63,8 +66,14 @@ def store_notice(notice):
     Upsert = insert if new, do nothing if already exists (matched by notice_id).
     Returns True if this was a genuinely NEW notice, False if it already existed.
     """
+    is_invalid = notice["notice_id"] in INVALID_NOTICE_IDS
     notice["detected_at"] = datetime.now(timezone.utc)
-    notice["status"] = "new"
+    notice["status"] = "invalid" if is_invalid else "new"
+    if is_invalid:
+        notice["processing_error"] = (
+            f"File contains invalid syntax. PDF URL: {notice['url']}"
+        )
+        notice["invalid_pdf_url"] = notice["url"]
 
     result = notices_collection.update_one(
         {"notice_id": notice["notice_id"]},   # match condition
@@ -74,7 +83,7 @@ def store_notice(notice):
 
     # If a new document was inserted, MongoDB gives us its upserted_id.
     # If the document already existed, upserted_id is None.
-    return result.upserted_id is not None
+    return result.upserted_id is not None and not is_invalid
 
 
 # --- Step 7: compare + report ---

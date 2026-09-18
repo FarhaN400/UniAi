@@ -57,7 +57,7 @@ def process_new_notices(limit=None):
         print("No notices with status 'new' found in MongoDB. Everything is up to date!")
         return
 
-    print("=" * 55)
+    print("\n" + "=" * 55)
     print(f" Starting Batch Pipeline: {total} new notice(s) to process")
     print("=" * 55)
 
