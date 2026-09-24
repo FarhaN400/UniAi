@@ -47,7 +47,7 @@ def process_new_notices(limit=None):
     """
     query = {"status": "new"}
     cursor = collection.find(query)
-    if limit:
+    if limit is not None:
         cursor = cursor.limit(limit)
 
     new_notices = list(cursor)

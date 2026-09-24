@@ -354,67 +354,141 @@ MongoDB
 
 ---
 
-# 3️⃣ Module 3 — Document Chunking & Embeddings
+# 3️⃣ Module 3 — Knowledge Base & Pinecone Vector Storage
 
 ### 🎯 Objective
 
-Prepare processed university information for semantic search.
+Convert the structured information generated in **Module 2** into a searchable vector knowledge base using **Pinecone**.
 
-Large documents cannot simply be treated as one huge piece of text.
-
-Therefore, the information will be divided into smaller meaningful chunks.
+Instead of searching university notices through traditional keyword matching, the processed notices from MongoDB are converted into rich retrieval-friendly representations and indexed into Pinecone to enable semantic search based on the meaning of student queries.
 
 ### Workflow
 
 ```text
-MongoDB
-   ↓
-Raw Text / Structured Information
-   ↓
-Document Cleaning
-   ↓
-Chunking
-   ↓
-Embedding Model
-   ↓
-Vector Representation
-```
-
-### Why Chunking?
-
-Suppose a notice contains:
-
-```text
-Page 1 → Introduction
-Page 2 → Eligibility
-Page 3 → Important Dates
-Page 4 → Fees
-Page 5 → Instructions
-```
-
-Instead of searching the entire notice every time, the system creates smaller searchable units.
-
-Example:
-
-```text
-Chunk 1 → Eligibility
-Chunk 2 → Important Dates
-Chunk 3 → Fees
-Chunk 4 → Instructions
+Processed Notices (MongoDB: status = "processed")
+                       │
+                       ▼
+              Check Indexing Status
+             (pinecone_indexed == True?)
+               ↙                     ↘
+             Yes                      No
+              │                        │
+              ▼                        ▼
+            Skip             Build Retrieval Text
+                             (Title, Type, Summary,
+                             Key Points, Deadlines)
+                                       │
+                                       ▼
+                             Pinecone Vector Index
+                             (Namespace: "notices")
+                                       │
+                                       ▼
+                               Update MongoDB
+                          ("pinecone_indexed": True,
+                           "pinecone_indexed_at")
+                                       │
+                                       ▼
+                           Ready for Semantic Search
 ```
 
 ### Technologies
 
-Planned:
-
-* LangChain
-* Text Splitters
-* Embedding Model
 * Python
+* Pinecone (`pinecone` SDK)
+* PyMongo
+* MongoDB Atlas
+* python-dotenv
+* `datetime` (UTC timestamps)
+
+### Retrieval Text Construction
+
+The structured data stored in MongoDB during Module 2 is transformed into a unified text representation optimized for semantic embedding and retrieval:
+
+* **Notice Title:** Primary context
+* **Notice Type:** Category (e.g., Examination, Admission, Scholarship)
+* **Summary:** High-level overview of the notice
+* **Key Points:** Bullet points extracted by LLM
+* **Important Dates / Deadlines:** Critical timing information
+
+```python
+def build_retrieval_text(notice):
+    sd = notice["structured_data"]
+    parts = [
+        sd.get("title", ""),
+        sd.get("notice_type", ""),
+        sd.get("summary", ""),
+    ]
+    key_points = sd.get("key_points", [])
+    if key_points:
+        parts.append(" ".join(key_points))
+    deadline = sd.get("important_dates", {}).get("last_date")
+    if deadline:
+        parts.append(f"Deadline: {deadline}")
+    return " ".join(p for p in parts if p)
+```
+
+### Pinecone Indexing & Record Schema
+
+Each processed notice is upserted into the `notices` namespace of the Pinecone index (`uniai`):
+
+```python
+index.upsert_records(
+    namespace="notices",
+    records=[{
+        "id": notice["notice_id"],
+        "text": text,
+        "title": notice["structured_data"].get("title"),
+        "notice_type": notice["structured_data"].get("notice_type"),
+        "url": notice["url"],
+    }]
+)
+```
+
+#### Record Structure:
+
+| Field | Description |
+| --- | --- |
+| `id` | Unique SHA-256 notice identifier (`notice_id`) |
+| `text` | Unified retrieval-friendly text |
+| `title` | Notice title |
+| `notice_type` | Category of the notice |
+| `url` | Original MAKAUT notice URL |
+
+### MongoDB Index Tracking & Duplicate Prevention
+
+To prevent re-indexing notices on subsequent runs, MongoDB tracks the Pinecone indexing status:
+
+```python
+{
+    "pinecone_indexed": True,
+    "pinecone_indexed_at": datetime.now(timezone.utc)
+}
+```
+
+* **Incremental Indexing (`reindex=False`):** Queries only notices with `"status": "processed"` where `pinecone_indexed` is missing or `False`.
+* **Reindexing Support (`reindex=True`):** Allows a complete refresh of the Pinecone knowledge base.
+* **Batch Processing:** Supports a `limit` parameter for testing and incremental batch upserts.
+
+### Semantic Search Verification
+
+The module includes semantic search verification (`search.py`) using Pinecone's `search_records` API:
+
+```python
+def search_notices(question, top_k=3):
+    results = index.search_records(
+        namespace="notices",
+        query={
+            "inputs": {"text": question},
+            "top_k": top_k
+        }
+    )
+```
+
+Results are normalized and deduplicated by title to return the top most relevant notices and similarity scores for any student query.
 
 ### Current Status
 
-🔜 Next Module
+✅ Completed
 
 ---
 
@@ -818,10 +892,10 @@ university-intelligent-qa/
 │   ├── prompt.py
 │   └── requirements.txt
 │
-├── module3_embeddings/
-│   ├── chunking.py
-│   ├── embeddings.py
-│   └── ...
+├── module3_knowledge_base/
+│   ├── main.py
+│   ├── search.py
+│   └── Readme.md
 │
 ├── module4_vector_store/
 │   ├── vector_store.py
@@ -864,7 +938,7 @@ university-intelligent-qa/
 ```text
 Module 1  ████████████████████  100% ✅
 Module 2  ████████████████████  100% ✅
-Module 3  ████░░░░░░░░░░░░░░░░   20% 🔜
+Module 3  ████████████████████  100% ✅
 Module 4  ░░░░░░░░░░░░░░░░░░░░    0% 🔜
 Module 5  ░░░░░░░░░░░░░░░░░░░░    0% 🔜
 Module 6  ░░░░░░░░░░░░░░░░░░░░    0% 🔜
@@ -1128,14 +1202,15 @@ The project starts with a pretrained LLM to build and validate the complete appl
 ✅ MongoDB structured-data storage
 ✅ Processing status management
 ✅ Batch processing with error handling
+✅ Retrieval text construction from structured data
+✅ Pinecone vector knowledge base indexing
+✅ MongoDB Pinecone indexing tracking & deduplication
+✅ Semantic search & retrieval verification
 
 **Currently Working Towards:**
 
-🔜 Document chunking
-🔜 Embeddings
-🔜 Vector database
-🔜 Semantic retrieval
-🔜 RAG pipeline
+🔜 Semantic retrieval & RAG pipeline
+🔜 Response validation & source grounding
 🔜 Student-facing chatbot
 🔜 Custom GPT integration
 
