@@ -1,10 +1,10 @@
 import os
-from datetime import datetime, timezone
+import re
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from pinecone import Pinecone
 
-load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # --- MongoDB ---
 MONGO_URI = os.getenv("MONGO_URI")
@@ -16,6 +16,21 @@ notices_collection = db["university_documents"]
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index("uniai")
+
+
+def extract_year(notice):
+    """Pull a 4-digit year from issue_date, falling back to the title if needed."""
+    issue_date = notice["structured_data"].get("issue_date", "") or ""
+    match = re.search(r'(20\d{2})', issue_date)
+    if match:
+        return int(match.group(1))
+
+    title = notice["structured_data"].get("title", "") or ""
+    match = re.search(r'(20\d{2})', title)
+    if match:
+        return int(match.group(1))
+
+    return None
 
 
 def build_retrieval_text(notice):
@@ -36,40 +51,28 @@ def build_retrieval_text(notice):
 
 def index_one_notice(notice):
     text = build_retrieval_text(notice)
+    year = extract_year(notice)
+
+    record = {
+        "id": notice["notice_id"],
+        "text": text,
+        "title": notice["structured_data"].get("title"),
+        "notice_type": notice["structured_data"].get("notice_type"),
+        "url": notice["url"],
+    }
+
+    if year is not None:
+        record["year"] = year
 
     index.upsert_records(
         namespace="notices",
-        records=[{
-            "id": notice["notice_id"],
-            "text": text,
-            "title": notice["structured_data"].get("title"),
-            "notice_type": notice["structured_data"].get("notice_type"),
-            "url": notice["url"],
-        }]
+        records=[record]
     )
-
-    notices_collection.update_one(
-        {"notice_id": notice["notice_id"]},
-        {"$set": {
-            "pinecone_indexed": True,
-            "pinecone_indexed_at": datetime.now(timezone.utc)
-        }}
-    )
-    print(f"Indexed: {notice['structured_data'].get('title')}")
+    print(f"Indexed: {notice['structured_data'].get('title')} (year: {year})")
 
 
-def index_all_processed_notices(limit=None, reindex=False):
-    if reindex:
-        query = {"status": "processed"}
-    else:
-        query = {
-            "status": "processed",
-            "$or": [
-                {"pinecone_indexed": {"$exists": False}},
-                {"pinecone_indexed": False}
-            ]
-        }
-
+def index_all_processed_notices(limit=None):
+    query = {"status": "processed"}
     cursor = notices_collection.find(query)
     if limit:
         cursor = cursor.limit(limit)
@@ -84,5 +87,4 @@ def index_all_processed_notices(limit=None, reindex=False):
 
 
 if __name__ == "__main__":
-    # set limit for eg. , otherwise processed all notifications
-    index_all_processed_notices(reindex=False)
+    index_all_processed_notices()
