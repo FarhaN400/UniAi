@@ -1,10 +1,11 @@
 import os
 import re
+from datetime import datetime, timezone
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from pinecone import Pinecone
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv()
 
 # --- MongoDB ---
 MONGO_URI = os.getenv("MONGO_URI")
@@ -50,14 +51,15 @@ def build_retrieval_text(notice):
 
 
 def index_one_notice(notice):
+    sd = notice.get("structured_data") or {}
     text = build_retrieval_text(notice)
     year = extract_year(notice)
 
     record = {
         "id": notice["notice_id"],
         "text": text,
-        "title": notice["structured_data"].get("title"),
-        "notice_type": notice["structured_data"].get("notice_type"),
+        "title": sd.get("title"),
+        "notice_type": sd.get("notice_type"),
         "url": notice["url"],
     }
 
@@ -68,13 +70,30 @@ def index_one_notice(notice):
         namespace="notices",
         records=[record]
     )
-    print(f"Indexed: {notice['structured_data'].get('title')} (year: {year})")
+
+    notices_collection.update_one(
+        {"notice_id": notice["notice_id"]},
+        {
+            "$set": {
+                "pinecone_indexed": True,
+                "pinecone_indexed_at": datetime.now(timezone.utc)
+            }
+        }
+    )
+
+    print(f"Indexed: {sd.get('title')} (year: {year})")
 
 
-def index_all_processed_notices(limit=None):
+def index_all_processed_notices(limit=None, reindex=False):
     query = {"status": "processed"}
+    if not reindex:
+        query["$or"] = [
+            {"pinecone_indexed": {"$exists": False}},
+            {"pinecone_indexed": False}
+        ]
+
     cursor = notices_collection.find(query)
-    if limit:
+    if limit is not None:
         cursor = cursor.limit(limit)
 
     notices = list(cursor)

@@ -110,10 +110,10 @@ Source / Notice Reference
                                  │
                                  ▼
                     ┌──────────────────────────┐
-                    │     MODULE 4 (NEXT)      │
+                    │     MODULE 4             │
                     │  Student Query & RAG     │
                     │                          │
-                    │ Student Query → Search → │
+                    │ Hybrid Retrieval Router  │
                     │ Context → LLM Response   │
                     └────────────┬─────────────┘
                                  │
@@ -487,15 +487,15 @@ Results are normalized and deduplicated by title to return the top most relevant
 
 ---
 
-# 4️⃣ Module 4 — Student Query Processing, Semantic Retrieval & RAG Pipeline
+# 4️⃣ Module 4 — Student Query Processing, Hybrid Retrieval & RAG Pipeline
 
 ### 🎯 Objective
 
-Connect natural-language student questions to the official university knowledge base.
+Connect natural-language student questions directly to the official university knowledge base.
 
-Instead of browsing dozens of PDF circulars or relying on brittle keyword matching, students can ask questions directly in natural language (e.g. *"What is the last date for submitting the examination form?"* or *"What documents do I need for WBJEE reporting?"*).
+Instead of browsing dozens of PDF circulars or relying on brittle keyword matching, students can ask questions naturally (e.g. *"What documents do I need for WBJEE 2026 admission?"*, *"Give me 4 latest notices"*, or *"When is the semester examination form fill-up deadline?"*).
 
-Module 4 will understand the student's intent, perform semantic vector search against the Pinecone `notices` namespace, retrieve the most relevant official university circulars, construct grounded context, and prompt the LLM to generate an accurate, verified answer citing the official MAKAUT notice and source URL.
+Module 4 analyzes query intent, performs hybrid retrieval (Pinecone vector search with metadata year filtering + MongoDB temporal/topic routing), hydratates complete notice records, maintains multi-turn conversational context, and prompts the LLM to generate verified, hallucination-free answers citing official MAKAUT notice titles and PDF URLs.
 
 ### 🔄 Student Query & RAG Workflow
 
@@ -503,28 +503,42 @@ Module 4 will understand the student's intent, perform semantic vector search ag
 Student Question
        │
        ▼
-Query Preprocessing & Intent Recognition
+Query Intent & Parameter Parsing
+ (Time-based / Specific Topic / Informational QA)
        │
-       ▼
-Pinecone Semantic Search
-(namespace: "notices", inputs: {"text": question}, top_k=3)
-       │
-       ▼
-Relevance Ranking & Title Deduplication
-       │
-       ▼
-Grounded Context Assembly
-(Title, Type, Summary, Key Points, Deadlines, Source URL)
-       │
-       ▼
-RAG Prompt Construction
-       │
-       ▼
-LLM Generation
-(Hugging Face: gpt-oss-120b)
-       │
-       ▼
-Verified Answer + Direct Notice Citation & Link
+       ├─────────────────────────┬─────────────────────────┐
+       ▼                         ▼                         ▼
+Temporal Retrieval          Topic Search              Semantic Vector
+(MongoDB date sorting)    (MongoDB regex)             Search (Pinecone)
+- "latest", "today",      - "wbjee", "jelet"          - Namespace: "notices"
+  "yesterday"             - Title & text regex        - Filter: {"year": year}
+       │                         │                         │
+       └─────────────────────────┼─────────────────────────┘
+                                 │
+                                 ▼
+                     Notice Record Hydration
+               (Fetch full structured JSON from MongoDB)
+                                 │
+                                 ▼
+                    Follow-up & Ordinal Router
+              - Ordinal selection ("5th one")
+              - Single-notice filter ("just 1")
+              - Formatted lists for multi-notice queries
+                                 │
+                                 ▼
+                     Grounded Context Assembly
+             (Title, Type, Summary, Dates, Source URL)
+                                 │
+                                 ▼
+                   LangChain RAG Chain Execution
+                 (Prompt + Chat History + Context)
+                                 │
+                                 ▼
+                LLM: Hugging Face (gpt-oss-120b)
+                                 │
+                                 ▼
+                    Final Grounded Answer
+                + Official MAKAUT PDF Link
 ```
 
 ### 💡 Example Interaction
@@ -536,7 +550,7 @@ Student:
         │
         ▼
 
-Pinecone Semantic Retrieval:
+Pinecone Semantic Retrieval (with year=2026 metadata filter):
 - Found Notice: "Notification for reporting of candidates for admission through WBJEE-2026"
 - Similarity Score: 0.892
 - Official URL: https://makautwb.ac.in/notice_wbjee_2026.pdf
@@ -562,24 +576,25 @@ Source: Notification for reporting of candidates for admission through WBJEE-202
 URL: https://makautwb.ac.in/notice_wbjee_2026.pdf"
 ```
 
-### Planned Components
+### Implemented Components
 
-* **Query Preprocessing (`query_processor.py`)**: Normalization, time/session keyword detection (e.g., "Phase 2", "2026", "JELET"), and intent classification.
-* **Semantic Retriever (`retriever.py`)**: Calling Pinecone's `search_records`, title deduplication, relevance score filtering, and top-$K$ notice extraction.
-* **RAG Prompt Chain (`rag_pipeline.py`)**: Assembling retrieved notice context with anti-hallucination system instructions.
-* **Source Attribution & Grounding**: Appending official MAKAUT notice URLs, titles, and dates to every answer so students can verify information independently.
+* **Main Assistant & RAG Orchestrator (`Module4/main.py`)**: Hugging Face LLM integration (`openai/gpt-oss-120b`), query classification, count parsing, ordinal resolution, conversational memory, and interactive CLI.
+* **Hybrid Retrieval Engine (`Module4/retrieve.py`)**: Pinecone vector search, MongoDB temporal & topic retrieval, year extraction, document hydration, and context compilation.
+* **Anti-Hallucination Prompt (`Module4/prompt.py`)**: Strict LangChain prompt template enforcing grounded answers, concise outputs, and verified source citations.
+* **Automated Test Suite (`Module4/test.py`)**: 7 comprehensive test suites covering count requests, ordinal follow-ups, topic filters, year-based Pinecone filtering, and date queries.
 
 ### Technologies
 
 * Python
-* Pinecone SDK (`search_records`)
-* LangChain Core (Prompt Templates & Chains)
+* Pinecone SDK (`search_records` with metadata filters)
+* LangChain Core (`ChatPromptTemplate`, `ChatHuggingFace`)
 * Hugging Face Endpoint (`openai/gpt-oss-120b`)
-* PyMongo (Metadata enrichment)
+* PyMongo & MongoDB Atlas (Metadata hydration & temporal search)
+* python-dotenv
 
 ### Current Status
 
-🔜 **Next Module (Up Next)**
+✅ **Completed**
 
 ---
 
@@ -769,45 +784,47 @@ The final system will work like this:
 
 ---
 
-# 🗂️ Planned Project Structure
+# 🗂️ Project Repository Structure
 
 ```text
-university-intelligent-qa/
+UniAi/
 │
 ├── Module1/
-│   ├── scrapper.py
-│   ├── module1-revision-notes.md
-│   └── requirements.txt
+│   ├── scrapper.py               # Automated MAKAUT notice scraper & MongoDB upsert
+│   ├── module1-revision-notes.md # Revision cheat sheet & portal analysis notes
+│   └── README.md                 # Module 1 documentation
 │
 ├── Module2/
-│   ├── main.py
-│   ├── ocr.py
-│   ├── prompt.py
-│   └── README.md
+│   ├── main.py                   # Automated PDF download & batch processing pipeline
+│   ├── ocr.py                    # PDF OCR text extraction & font/header artifact cleaning
+│   ├── prompt.py                 # Pydantic/JSON schema & LangChain structured extraction prompt
+│   └── README.md                 # Module 2 documentation
 │
 ├── Module3/
-│   ├── main.py
-│   ├── search.py
-│   └── Readme.md
+│   ├── main.py                   # Retrieval text synthesis & Pinecone vector indexing
+│   ├── search.py                 # Semantic similarity search verification with title deduplication
+│   └── Readme.md                 # Module 3 documentation
 │
-├── Module4_query_retrieval/     # Next: Student query processing & RAG
-│   ├── query_processor.py
-│   ├── retriever.py
-│   └── rag_pipeline.py
+├── Module4/
+│   ├── main.py                   # UniAI orchestrator, conversational memory & CLI
+│   ├── retrieve.py               # Hybrid retrieval router (Pinecone semantic + MongoDB temporal)
+│   ├── prompt.py                 # Strict anti-hallucination LangChain RAG prompt
+│   ├── test.py                   # Automated query & retrieval test suite
+│   └── README.md                 # Module 4 documentation
 │
-├── Module5_custom_gpt/          # Planned: Custom LLM from scratch
+├── Module5_custom_gpt/           # Planned: Custom LLM from scratch
 │   ├── tokenizer/
 │   ├── attention/
 │   ├── transformer/
 │   └── training/
 │
-├── Module6_interface/           # Planned: Web/API Chat UI
+├── Module6_interface/            # Planned: Web/API Chat UI
 │   ├── app.py
 │   └── frontend/
 │
-├── .env
-├── .gitignore
-└── README.md
+├── .env                          # Local credentials (ignored by git)
+├── .gitignore                    # Environment & artifact exclusions
+└── Readme.md                     # Root project documentation
 ```
 
 > **Note:** Never commit `.env` files, API keys, passwords, MongoDB credentials, or other secrets to GitHub.
@@ -820,7 +837,7 @@ university-intelligent-qa/
 Module 1  ████████████████████  100% ✅ (Automatic Web Scraper & Portal Monitor)
 Module 2  ████████████████████  100% ✅ (OCR & LLM Information Extraction)
 Module 3  ████████████████████  100% ✅ (Knowledge Base & Pinecone Vector Store)
-Module 4  ░░░░░░░░░░░░░░░░░░░░    0% 🔜 (Student Query Processing & Semantic RAG)
+Module 4  ████████████████████  100% ✅ (Student Query Processing & Hybrid RAG Pipeline)
 Module 5  ░░░░░░░░░░░░░░░░░░░░    0% 🔜 (Custom GPT Architecture from Scratch)
 Module 6  ░░░░░░░░░░░░░░░░░░░░    0% 🔜 (User Interface & Chat Application)
 ```
@@ -1083,15 +1100,18 @@ The project starts with a pretrained LLM to build and validate the complete appl
 ✅ Integrated vector embeddings & upsert via Pinecone records API (`Module3/main.py`)
 ✅ Incremental indexing tracking & duplicate prevention in MongoDB
 ✅ Semantic similarity search verification with test student queries (`Module3/search.py`)
+✅ Natural language query intent detection & count parsing (`Module4/main.py`)
+✅ Dual-path hybrid retrieval: Pinecone semantic search with year filtering + MongoDB temporal & topic queries (`Module4/retrieve.py`)
+✅ Full MongoDB notice hydration & grounded prompt context synthesis (`Module4/retrieve.py`)
+✅ Anti-hallucination prompt engineering & official notice source citations (`Module4/prompt.py`)
+✅ Conversational memory & follow-up resolution (`Module4/main.py`)
+✅ Automated verification test suite for QA and retrieval (`Module4/test.py`)
 
-**Currently Working Towards (Next: Student Query & RAG):**
+**Currently Working Towards (Next Phase):**
 
-🔜 Student natural language query processing & intent detection (`Module 4`)
-🔜 Top-K semantic retrieval from Pinecone with title deduplication (`Module 4`)
-🔜 Dynamic context window assembly & prompt engineering (`Module 4`)
-🔜 Grounded answer generation with official notice citations & URLs (`Module 4`)
-🔜 Custom GPT-style language model built from scratch (`Module 5`)
-🔜 Interactive student-facing chat web/mobile interface (`Module 6`)
+🔜 Custom GPT-style causal language model built from scratch (`Module 5`)
+🔜 Tokenizer training, self-attention blocks, and university domain fine-tuning (`Module 5`)
+🔜 Interactive student chat application & FastAPI REST service (`Module 6`)
 
 ---
 

@@ -48,8 +48,8 @@ if __name__ == "__main__":
     print("Query: 'what documents do I need for WBJEE 2026 admission'")
     search_notices("what documents do I need for WBJEE 2026 admission")
 
-    print("\nQuery: 'when is the phase 2 registration deadline'")
-    search_notices("when is the phase 2 registration deadline")
+    print("\nQuery: 'M.Pharm Direct and NCAHP Lateral Direct Admission'")
+    search_notices("M.Pharm Direct and NCAHP Lateral Direct Admission")
 
     print("\nQuery: 'is ragging prohibited at this university'")
     search_notices("is ragging prohibited at this university")

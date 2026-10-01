@@ -212,11 +212,12 @@ process_new_notices(limit=5)
 
 ---
 
-## What's NOT Built Yet (Next Modules)
+## Downstream Modules Integration
 
-- ❌ **Module 3: Text Chunking & Preprocessing**: Splitting notice bodies and structured metadata into clean semantic chunks.
-- ❌ **Module 4: Embedding Generation & Vector Database**: Storing chunk embeddings (e.g., ChromaDB / FAISS) for dense retrieval.
-- ❌ **Module 5: RAG & User Query Interface**: Retrieving top-k chunks, grounding LLM answers, and handling student queries.
+- ✅ **Module 3 — Knowledge Base & Pinecone Vector Storage**: Synthesizes structured data into retrieval-optimized text representations and indexes them into Pinecone (`uniai` index, `notices` namespace).
+- ✅ **Module 4 — Student Query Processing, Hybrid Retrieval & RAG Pipeline**: Implements temporal/semantic retrieval routing, conversational memory, and LLM-grounded answers.
+- 🔜 **Module 5 — Custom GPT Architecture**: Training a domain-specific causal transformer from scratch (following Sebastian Raschka's LLM architecture).
+- 🔜 **Module 6 — Student Web Application & REST API**: Interactive chat interface with FastAPI backend.
 
 ---
 

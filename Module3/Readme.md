@@ -151,15 +151,19 @@ Finally, all available information is combined into one retrieval text.
 The generated retrieval text is sent to the Pinecone index.
 
 ```python
+record = {
+    "id": notice["notice_id"],
+    "text": text,
+    "title": notice["structured_data"].get("title"),
+    "notice_type": notice["structured_data"].get("notice_type"),
+    "url": notice["url"],
+}
+if year is not None:
+    record["year"] = year
+
 index.upsert_records(
     namespace="notices",
-    records=[{
-        "id": notice["notice_id"],
-        "text": text,
-        "title": notice["structured_data"].get("title"),
-        "notice_type": notice["structured_data"].get("notice_type"),
-        "url": notice["url"],
-    }]
+    records=[record]
 )
 ```
 
@@ -167,13 +171,16 @@ index.upsert_records(
 
 Each notice is stored with:
 
-| Field         | Purpose                    |
-| ------------- | -------------------------- |
-| `id`          | Unique notice identifier   |
-| `text`        | Retrieval text             |
-| `title`       | Notice title               |
-| `notice_type` | Type/category of notice    |
-| `url`         | Original MAKAUT notice URL |
+| Field         | Type    | Purpose                                               |
+| ------------- | ------- | ----------------------------------------------------- |
+| `id`          | String  | Unique notice identifier (`notice_id`)                |
+| `text`        | String  | Unified retrieval-friendly text representation        |
+| `title`       | String  | Official notice title                                 |
+| `notice_type` | String  | Type/category of notice (e.g. Examination, Admission) |
+| `url`         | String  | Original MAKAUT notice PDF URL                        |
+| `year`        | Integer | Extracted 4-digit academic/calendar year (optional)   |
+
+> **Year Extraction:** Extracted via regex `r'(20\d{2})'` from `issue_date` (falling back to `title`). This enables downstream metadata filtering in Module 4 (e.g., retrieving only 2026 notices for *"WBJEE 2026 admission"*).
 
 The records are stored inside the Pinecone namespace:
 
@@ -450,11 +457,14 @@ Make sure:
 
 Then run:
 
+### 1. Index Processed Notices into Pinecone
+
 ```bash
-python module3.py
+cd /Users/farhanakhtar/Desktop/Project/UniAi/Module3
+python3 main.py
 ```
 
-The default execution is:
+The default execution indexes all unindexed notices:
 
 ```python
 index_all_processed_notices(reindex=False)
@@ -465,12 +475,19 @@ The terminal will display something similar to:
 ```text
 Found 25 processed notices to index.
 
-Indexed: Examination Form Fill-up Notice
-Indexed: Scholarship Notice
-Indexed: Holiday Notice
+Indexed: Notice Regarding Semester Examination Form Fill-up (year: 2026)
+Indexed: Notification for Reporting of WBJEE Candidates (year: 2026)
 ...
 
 Done. Indexed 25 notices into Pinecone.
+```
+
+### 2. Verify Semantic Search (`search.py`)
+
+Run semantic search queries with title deduplication directly against the Pinecone index:
+
+```bash
+python3 search.py
 ```
 
 ---
@@ -574,45 +591,21 @@ AI Assistant
 | Module 1 — Portal Monitoring           | ✅ Completed     |
 | Module 2 — Document Processing         | ✅ Completed     |
 | **Module 3 — Pinecone Knowledge Base** | **✅ Completed** |
-| Module 4 — Retrieval + RAG             | 🔜 Next         |
-| Module 5 — LLM / Own GPT               | 🔜 Planned      |
+| **Module 4 — Retrieval + RAG**         | **✅ Completed** |
+| Module 5 — LLM / Own GPT               | 🔜 In Progress  |
 | Module 6 — User Interface              | 🔜 Planned      |
 
 ---
 
-# 🎯 What Comes Next?
+# 🎯 Downstream RAG Integration (Module 4)
 
-With Module 3 completed, the processed university notices are now available in the Pinecone knowledge base.
+With Module 3 completed, the processed university notices are indexed in the Pinecone vector knowledge base.
 
-The next module will focus on **retrieval**.
-
-The goal will be to take a student's question such as:
-
-```text
-"What is the last date for submitting the examination form?"
-```
-
-and find the most relevant information from Pinecone.
-
-The upcoming pipeline will therefore be:
-
-```text
-Student Question
-       ↓
-Query Embedding
-       ↓
-Pinecone Similarity Search
-       ↓
-Top Relevant Results
-       ↓
-Context
-       ↓
-LLM
-       ↓
-Answer
-```
-
-This will form the core of the **Retrieval-Augmented Generation (RAG)** system.
+**Module 4 (Student Query Processing & RAG Pipeline)** directly consumes this index:
+1. Student questions are classified for intent and temporal constraints.
+2. Questions mentioning a specific year (e.g. 2026) trigger a metadata filter on the `year` field in Pinecone.
+3. Pinecone's `search_records` retrieves the most relevant notice IDs.
+4. Full structured records are fetched from MongoDB, synthesized into prompt context, and answered accurately by the LLM with official citations.
 
 ---
 
