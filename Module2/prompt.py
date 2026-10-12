@@ -36,6 +36,11 @@ Rules:
 - Return ONLY the JSON object. No explanations, no markdown code fences, no extra text before or after.
 - Copy all numbers, times, dates, and figures accurately as stated in the notice.
 - The input text may come from OCR and could contain optical misrecognitions (for example: "JJ a.m.", "Il a.m.", or "1l a.m." for "11 a.m.", or "O" for "0"). Resolve obvious OCR character substitutions for times, dates, and numbers rather than guessing or defaulting to common assumptions like 9 a.m. or 10 a.m. Do not invent dates or times not present in the text.
+- Classify a notice by its primary subject, not by isolated words. Admission cancellation, withdrawal and refund
+notices belong to Admission, not Discipline.
+- Set important_dates.start_date and last_date only when the notice explicitly establishes an action window, event period, or deadline. Publication dates, refund cutoff dates, and notice issue dates must not automatically become start_date or last_date. Preserve their exact meaning in key_points.
+- The fees object represents fees payable by applicants or students, not refund amounts, deductions, penalties, or deposits being returned. Record these other monetary amounts with their exact purpose in key_points.
+- Even when fee information is absent, "fees" MUST remain a JSON object with "amount": null and "currency": null.Never return "fees": null. Likewise, "important_dates" must always contain both "start_date" and "last_date", even if both values are null.
 
 NOTICE TEXT:
 {text}

@@ -187,125 +187,127 @@ def retrieve_topic_notices(topic, top_k=3):
 # Semantic Retrieval
 # --------------------------------------------------
 
-def retrieve_semantic(question, top_k=3):
+def _get_hit_value(hit, key, default=None):
+    return hit.get(key, default) if isinstance(hit, dict) else getattr(hit, key, default)
+
+
+def _get_hits(results):
+    result = _get_hit_value(results, "result", {})
+    return _get_hit_value(result, "hits", []) or []
+
+
+def _document_year_matches(record, year):
+    """Check the whole notice (not just issue_date, which may differ from admission year)."""
+    if year is None:
+        return True
+    data = record.get("structured_data") or {}
+    searchable = " ".join(str(x) for x in (
+        record.get("title", ""), data.get("title", ""),
+        data.get("summary", ""), data.get("academic_year", ""),
+        data.get("key_points", ""), record.get("url", "")))
+    return bool(re.search(rf"(?<!\d){year}(?!\d)", searchable))
+
+
+def _lexical_score(question, record):
+    """Small lexical reranker to supplement the Pinecone similarity score."""
+    data = record.get("structured_data") or {}
+    title = str(data.get("title") or record.get("title") or "").lower()
+    text = " ".join(str(v) for v in (
+        title, data.get("summary", ""), data.get("key_points", ""),
+        data.get("notice_type", ""), data.get("action_required", ""))).lower()
+    tokens = set(re.findall(r"[a-z]{3,}", question.lower())) - {
+        "what", "when", "which", "where", "with", "from", "does", "that",
+        "this", "students", "student", "makaut", "notice", "notices",
+        "required", "mentioned", "please", "about", "for", "the", "and"}
+    title_words = set(re.findall(r"[a-z]{3,}", title))
+    body_words = set(re.findall(r"[a-z]{3,}", text))
+    score = 2 * len(tokens & title_words) + len(tokens & body_words)
+    # Document verification is a distinct intent, not interchangeable with registration closure.
+    if re.search(r"document|verification|bring", question, re.I):
+        if re.search(r"document|verification", text):
+            score += 5
+        if "registration portal" in title and "verification" not in title:
+            score -= 3
+    return score
+
+
+def retrieve_semantic(question, top_k=5):
+    """Retrieve Pinecone candidates and resolve them through MongoDB.
+
+    First try an indexed numeric year filter. If this yields no usable matches,
+    search without the filter and verify year against MongoDB document content.
+    This avoids silently dropping notices with absent/wrong-type year metadata.
     """
-    Search Pinecone semantically.
-
-    If the student mentions a year, apply the
-    corresponding Pinecone metadata filter.
-
-    Pinecone returns notice IDs, which are then
-    used to retrieve complete records from MongoDB.
-    """
-
     year = extract_year_from_question(question)
+    debug = os.getenv("UNIAI_DEBUG", "0") == "1"
+    candidate_k = max(top_k, 15)
+    filtered_query = {"inputs": {"text": question}, "top_k": candidate_k}
+    if year is not None:
+        filtered_query["filter"] = {"year": {"$eq": year}}
 
-    query_params = {
-        "inputs": {
-            "text": question
-        },
-        "top_k": top_k
-    }
-
-    # Optional year filtering
-    if year:
-
-        query_params["filter"] = {
-            "year": {
-                "$eq": year
-            }
-        }
-
-    try:
-
-        results = index.search_records(
-            namespace="notices",
-            query=query_params
-        )
-
-    except Exception as e:
-
-        print(f"Pinecone search failed: {e}")
-
-        return []
-
-
-    # --------------------------------------------------
-    # Extract IDs from Pinecone results
-    # --------------------------------------------------
-
-    if isinstance(results, dict):
-
-        hits = (
-            results
-            .get("result", {})
-            .get("hits", [])
-        )
-
-    else:
-
-        result_object = getattr(
-            results,
-            "result",
-            None
-        )
-
-        hits = getattr(
-            result_object,
-            "hits",
-            []
-        )
-
-
-    notice_ids = []
-
-    for hit in hits:
-
-        if isinstance(hit, dict):
-
-            notice_id = (
-                hit.get("id")
-                or hit.get("_id")
-            )
-
-        else:
-
-            notice_id = (
-                getattr(hit, "id", None)
-                or getattr(hit, "_id", None)
-            )
-
-        if notice_id:
-
-            notice_ids.append(notice_id)
-
-
-    # --------------------------------------------------
-    # Retrieve full documents from MongoDB
-    # --------------------------------------------------
-
-    full_records = []
-
-    for notice_id in notice_ids:
-
+    def search(params):
         try:
+            response = index.search_records(namespace="notices", query=params)
+            return _get_hits(response)
+        except Exception as exc:
+            print(f"[UniAI] Pinecone search error: {exc}")
+            return []
 
-            record = notices_collection.find_one({
-                "notice_id": notice_id
-            })
+    hits = search(filtered_query)
+    if year is not None and not hits:
+        if debug:
+            print(f"[UniAI] No indexed hits for numeric year={year}; retrying without metadata filter")
+        hits = search({"inputs": {"text": question}, "top_k": max(candidate_k, 40)})
 
-            if record:
+    def records_from_hits(hits_list):
+        rows = []
+        seen = set()
+        for position, hit in enumerate(hits_list):
+            notice_id = _get_hit_value(hit, "_id") or _get_hit_value(hit, "id")
+            if not notice_id or notice_id in seen:
+                continue
+            seen.add(notice_id)
+            record = notices_collection.find_one({"notice_id": notice_id})
+            if record is None:
+                if debug:
+                    print(f"[UniAI] Pinecone ID absent from MongoDB: {notice_id}")
+                continue
+            raw_score = _get_hit_value(hit, "_score", _get_hit_value(hit, "score", 0))
+            try:
+                semantic = float(raw_score or 0)
+            except (TypeError, ValueError):
+                semantic = 0
+            record_score = _lexical_score(question, record)
+            rows.append((record, record_score, semantic, position))
+            if debug:
+                print(f"[UniAI] hit={position + 1} score={semantic:.4f} "
+                      f"lexical={record_score} title={record.get('title')} id={notice_id}")
+        return rows
 
-                full_records.append(record)
+    rows = records_from_hits(hits)
+    if year is not None:
+        matches = [r for r in rows if _document_year_matches(r[0], year)]
+        if not matches:
+            # Fallback if indexed metadata is inaccurate or semantic candidate pool is too narrow.
+            hits = search({"inputs": {"text": question}, "top_k": max(candidate_k, 40)})
+            matches = [r for r in records_from_hits(hits) if _document_year_matches(r[0], year)]
+        rows = matches
+        if not rows:
+            # Last resort for legacy notices missing from the vector index.
+            # Limited, year-targeted MongoDB scan (not a general answer shortcut).
+            year_pattern = re.compile(str(year), re.IGNORECASE)
+            legacy = notices_collection.find({"status": "processed", "$or": [
+                {"title": year_pattern}, {"structured_data.title": year_pattern},
+                {"structured_data.summary": year_pattern}]})
+            for record in legacy:
+                if _document_year_matches(record, year):
+                    rows.append((record, _lexical_score(question, record), 0.0, 999))
+            if debug:
+                print(f"[UniAI] legacy MongoDB year fallback: {len(rows)} candidates")
 
-        except Exception as e:
-
-            print(
-                f"MongoDB fetch failed "
-                f"for {notice_id}: {e}"
-            )
-
-    return full_records
+    # Prefer full-question relevance; semantic score breaks lexical ties.
+    rows.sort(key=lambda row: (row[1], row[2]), reverse=True)
+    return [row[0] for row in rows[:top_k]]
 
 
 # --------------------------------------------------
