@@ -1,0 +1,17 @@
+# Requirements for the scheduled ingestion worker only.
+# Add any extra imports required by YOUR existing Module2/ocr.py, prompt.py, schema.py.
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
+pymongo>=4.8,<5
+python-dotenv>=1,<2
+pydantic>=2,<3
+pinecone>=5
+langchain-core>=0.3
+langchain-ollama
+langchain-groq
+pymupdf
+pytesseract
+Pillow
+pdfplumber
+pdf2image
+pypdf>=4,<7
