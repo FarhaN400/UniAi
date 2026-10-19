@@ -1,9 +1,7 @@
 name: UniAI - Automatic MAKAUT Notice Sync
 
-
 on:
   workflow_dispatch:
-
 
 permissions:
   contents: read
@@ -20,6 +18,9 @@ jobs:
       MONGO_URI: ${{ secrets.MONGO_URI }}
       PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ATLAS_CLIENT_ID: ${{ secrets.ATLAS_CLIENT_ID }}
+      ATLAS_CLIENT_SECRET: ${{ secrets.ATLAS_CLIENT_SECRET }}
+      ATLAS_PROJECT_ID: ${{ vars.ATLAS_PROJECT_ID }}
       LLM_PROVIDER: groq
       GROQ_MODEL: openai/gpt-oss-20b
       SYNC_PROCESS_LIMIT: "0"
@@ -30,13 +31,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements-phase5.txt
 
-      - name: Install free OCR dependencies
+      - name: Install OCR dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq tesseract-ocr poppler-utils
@@ -46,12 +47,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements-phase5.txt
 
-      - name: Check required secrets
+      - name: Check required credentials
         shell: bash
         run: |
-          test -n "$MONGO_URI" || (echo "MONGO_URI secret is missing" && exit 1)
-          test -n "$PINECONE_API_KEY" || (echo "PINECONE_API_KEY secret is missing" && exit 1)
-          test -n "$GROQ_API_KEY" || (echo "GROQ_API_KEY secret is missing" && exit 1)
+          test -n "$MONGO_URI" || (echo "MONGO_URI missing" && exit 1)
+          test -n "$PINECONE_API_KEY" || (echo "PINECONE_API_KEY missing" && exit 1)
+          test -n "$GROQ_API_KEY" || (echo "GROQ_API_KEY missing" && exit 1)
+          test -n "$ATLAS_CLIENT_ID" || (echo "ATLAS_CLIENT_ID missing" && exit 1)
+          test -n "$ATLAS_CLIENT_SECRET" || (echo "ATLAS_CLIENT_SECRET missing" && exit 1)
+          test -n "$ATLAS_PROJECT_ID" || (echo "ATLAS_PROJECT_ID missing" && exit 1)
 
-      - name: Run incremental MAKAUT synchronization
-        run: python backend/scheduler/sync_notices.py
+      - name: Temporarily authorize runner and synchronize notices
+        run: python backend/scheduler/run_with_atlas_access.py
