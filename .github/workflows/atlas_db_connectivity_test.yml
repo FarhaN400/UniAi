@@ -1,0 +1,148 @@
+name: UniAI - Atlas Database Connectivity Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ATLAS_CLIENT_ID: ${{ secrets.ATLAS_CLIENT_ID }}
+      ATLAS_CLIENT_SECRET: ${{ secrets.ATLAS_CLIENT_SECRET }}
+      ATLAS_PROJECT_ID: ${{ vars.ATLAS_PROJECT_ID }}
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+
+    steps:
+      - name: Configure Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install MongoDB driver
+        run: python -m pip install -q pymongo dnspython
+
+      - name: Temporarily allow runner IP and ping MongoDB
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import ipaddress
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from datetime import datetime, timedelta, timezone
+          from pymongo import MongoClient
+
+          API = "https://cloud.mongodb.com"
+          ACCEPT = "application/vnd.atlas.2025-03-12+json"
+          project = os.environ.get("ATLAS_PROJECT_ID", "")
+          client_id = os.environ.get("ATLAS_CLIENT_ID", "")
+          client_secret = os.environ.get("ATLAS_CLIENT_SECRET", "")
+          mongo_uri = os.environ.get("MONGO_URI", "")
+          if not re.fullmatch(r"[a-f0-9]{24}", project):
+              sys.exit("FAIL: ATLAS_PROJECT_ID repository variable is missing or malformed")
+          if not all([client_id, client_secret, mongo_uri]):
+              sys.exit("FAIL: Required GitHub secrets are missing")
+
+          def call(url, method="GET", data=None, token=None):
+              headers = {"Accept": ACCEPT, "User-Agent": "UniAI-GitHub-Actions"}
+              if token:
+                  headers["Authorization"] = "Bearer " + token
+              if data is not None:
+                  headers["Content-Type"] = "application/json"
+              request = urllib.request.Request(
+                  url, data=json.dumps(data).encode() if data is not None else None,
+                  headers=headers, method=method
+              )
+              with urllib.request.urlopen(request, timeout=25) as response:
+                  body = response.read()
+                  return json.loads(body) if body else {}
+
+          basic = base64.b64encode((client_id + ":" + client_secret).encode()).decode()
+          oauth = urllib.request.Request(
+              API + "/api/oauth/token",
+              data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
+              headers={
+                  "Authorization": "Basic " + basic,
+                  "Content-Type": "application/x-www-form-urlencoded",
+                  "Accept": "application/json",
+              }, method="POST",
+          )
+          with urllib.request.urlopen(oauth, timeout=25) as response:
+              token = json.load(response)["access_token"]
+          print("PASS: Atlas OAuth authentication")
+
+          # Resolve the runner's public IP without using any personal IP address.
+          ip_request = urllib.request.Request(
+              "https://api.ipify.org?format=json",
+              headers={"User-Agent": "UniAI-GitHub-Actions"},
+          )
+          with urllib.request.urlopen(ip_request, timeout=20) as response:
+              ip = str(ipaddress.IPv4Address(json.load(response)["ip"]))
+          if not ipaddress.ip_address(ip).is_global:
+              sys.exit("FAIL: Runner IP is not globally routable")
+          print("PASS: Runner public IPv4 discovered")
+
+          url = API + f"/api/atlas/v2/groups/{project}/accessList"
+          entries = call(url + "?itemsPerPage=500", token=token).get("results", [])
+          existing = False
+          for item in entries:
+              try:
+                  value = item.get("cidrBlock") or item.get("ipAddress")
+                  if value and ipaddress.ip_address(ip) in ipaddress.ip_network(value, strict=False):
+                      existing = True
+                      break
+              except ValueError:
+                  pass
+
+          created = False
+          try:
+              if existing:
+                  print("INFO: Runner IP was already permitted; no entry created")
+              else:
+                  expiry = (datetime.now(timezone.utc) + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                  call(url, method="POST", token=token, data=[{
+                      "ipAddress": ip,
+                      "comment": "UniAI temporary GitHub Actions DB connectivity test",
+                      "deleteAfterDate": expiry,
+                  }])
+                  created = True
+                  print("PASS: Temporary runner IP authorized (automatic expiry in 60 minutes)")
+
+              last_error = None
+              for attempt in range(1, 7):
+                  try:
+                      client = MongoClient(mongo_uri, serverSelectionTimeoutMS=12000)
+                      try:
+                          client.admin.command("ping")
+                      finally:
+                          client.close()
+                      print("PASS: MongoDB Atlas cloud connection from GitHub runner")
+                      break
+                  except Exception as exc:
+                      last_error = type(exc).__name__
+                      print(f"Waiting for Atlas network authorization ({attempt}/6): {last_error}")
+                      if attempt < 6:
+                          time.sleep(10)
+              else:
+                  raise RuntimeError(f"Database ping failed after retries: {last_error}")
+
+              print("PASS: Cloud database connectivity test complete; no notice data changed")
+          finally:
+              if created:
+                  try:
+                      call(url + "/" + urllib.parse.quote(ip, safe=""), method="DELETE", token=token)
+                      print("PASS: Temporary IP access entry removed")
+                  except Exception as exc:
+                      print("WARNING: Immediate IP cleanup failed; Atlas will expire it within 60 minutes")
+                      print("Cleanup error type:", type(exc).__name__)
+          PY
