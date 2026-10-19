@@ -3,6 +3,10 @@
 > **Modern, responsive, university-focused AI workspace for students and faculty of Maulana Abul Kalam Azad University of Technology (MAKAUT).**  
 > Built with **React 18**, **Vite**, **Tailwind CSS**, and **Lucide Icons**.
 
+<p align="center">
+  <img src="../assets/frontend-preview.png" alt="UniAI Web Interface" width="100%" />
+</p>
+
 ---
 
 ## 🌟 Features & Highlights

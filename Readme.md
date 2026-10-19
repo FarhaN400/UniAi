@@ -2,6 +2,10 @@
 
 > **An end-to-end, full-stack AI academic companion that automatically collects official university notices, extracts structured intelligence, and delivers verified, conversational answers grounded in official circulars with clickable citations.**
 
+<p align="center">
+  <img src="assets/frontend-preview.png" alt="UniAI Web Interface Preview" width="100%" />
+</p>
+
 🚧 **Project Status:** Active Development  
 🎯 **Target:** Final Year B.Tech CSE Project  
 🏫 **University:** Maulana Abul Kalam Azad University of Technology (MAKAUT)  
@@ -226,6 +230,8 @@ UniAI:   [Compares both notices, computes the exact date difference, and cites b
 
 ```text
 UniAi/
+├── assets/
+│   └── frontend-preview.png      # Web interface screenshot and display preview
 ├── backend/
 │   ├── app.py                    # FastAPI entry point (/api/chat, /health, CORS)
 │   ├── retrieve.py               # Hybrid retrieval router (Pinecone semantic + MongoDB temporal)
