@@ -1,0 +1,95 @@
+name: UniAI - Isolated Cloud Ingestion Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Do not overlap with the production sync job; temporary Atlas IP entries
+# should be created and removed by one job at a time.
+concurrency:
+  group: uniai-notice-sync
+  cancel-in-progress: false
+
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ATLAS_CLIENT_ID: ${{ secrets.ATLAS_CLIENT_ID }}
+      ATLAS_CLIENT_SECRET: ${{ secrets.ATLAS_CLIENT_SECRET }}
+      ATLAS_PROJECT_ID: ${{ vars.ATLAS_PROJECT_ID }}
+      LLM_PROVIDER: groq
+      GROQ_MODEL: openai/gpt-oss-20b
+      AUTO_APPROVE_LONG_NOTICES: "0"
+      SYNC_MAX_ATTEMPTS: "4"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-phase5.txt
+
+      - name: Install OCR system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr poppler-utils
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements-phase5.txt
+
+      - name: Configure and verify MAKAUT trusted TLS chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          cert_dir="${RUNNER_TEMP}/uniai-certs"
+          mkdir -p "$cert_dir"
+          curl --fail --location --show-error --silent --max-time 25 \
+            https://secure.globalsign.com/cacert/gsgccr6alphasslca2025.crt \
+            -o "$cert_dir/intermediate.crt"
+          openssl x509 -inform DER -in "$cert_dir/intermediate.crt" \
+            -out "$cert_dir/intermediate.pem"
+          actual="$(openssl x509 -in "$cert_dir/intermediate.pem" \
+            -fingerprint -sha1 -noout | cut -d= -f2 | tr -d ':' \
+            | tr '[:lower:]' '[:upper:]')"
+          expected="431955E6E5DABE857F1336C02368E5495F143EED"
+          if [ "$actual" != "$expected" ]; then
+            echo "FAIL: Intermediate certificate fingerprint mismatch"
+            exit 1
+          fi
+          python - "$cert_dir/intermediate.pem" "$cert_dir/ca-bundle.pem" <<'PY'
+          from pathlib import Path
+          import certifi
+          import sys
+          roots = Path(certifi.where()).read_bytes()
+          intermediate = Path(sys.argv[1]).read_bytes()
+          Path(sys.argv[2]).write_bytes(roots + b"\n" + intermediate)
+          PY
+          echo "REQUESTS_CA_BUNDLE=$cert_dir/ca-bundle.pem" >> "$GITHUB_ENV"
+          REQUESTS_CA_BUNDLE="$cert_dir/ca-bundle.pem" python - <<'PY'
+          import requests
+          r = requests.get('https://makautwb.ac.in/page.php?id=340', timeout=25)
+          r.raise_for_status()
+          print('PASS: MAKAUT HTTPS verified; HTTP', r.status_code)
+          PY
+
+      - name: Check required credentials
+        shell: bash
+        run: |
+          test -n "$MONGO_URI" || (echo "MONGO_URI missing" && exit 1)
+          test -n "$PINECONE_API_KEY" || (echo "PINECONE_API_KEY missing" && exit 1)
+          test -n "$GROQ_API_KEY" || (echo "GROQ_API_KEY missing" && exit 1)
+          test -n "$ATLAS_CLIENT_ID" || (echo "ATLAS_CLIENT_ID missing" && exit 1)
+          test -n "$ATLAS_CLIENT_SECRET" || (echo "ATLAS_CLIENT_SECRET missing" && exit 1)
+          test -n "$ATLAS_PROJECT_ID" || (echo "ATLAS_PROJECT_ID missing" && exit 1)
+
+      - name: Run isolated E2E ingestion with temporary Atlas access
+        run: python backend/scheduler/run_isolated_e2e_with_atlas_access.py
