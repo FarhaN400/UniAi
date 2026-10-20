@@ -1,0 +1,44 @@
+name: UniAI - MAKAUT HTTPS Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-website:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Install Python test libraries
+        run: python3 -m pip install --quiet --user requests certifi
+
+      - name: Inspect server TLS certificate chain
+        shell: bash
+        run: |
+          echo "=== OpenSSL certificate chain information ==="
+          timeout 20s bash -c 'echo | openssl s_client -connect makautwb.ac.in:443 -servername makautwb.ac.in -showcerts 2>&1' | grep -E '^([[:space:]]*[0-9]+ s:|depth=|verify error:|Verification error:|Verify return code:|subject=|issuer=|Certificate chain)' || true
+
+      - name: Compare Python and system CA trust stores
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import requests
+          import certifi
+
+          url = "https://makautwb.ac.in/page.php?id=340"
+          cases = (
+              ("Requests default trust store", True),
+              ("System CA certificates", "/etc/ssl/certs/ca-certificates.crt"),
+              ("Explicit certifi certificates", certifi.where()),
+          )
+          for name, ca in cases:
+              try:
+                  response = requests.get(url, verify=ca, timeout=18)
+                  print(f"{name}: TLS VERIFIED, HTTP {response.status_code}", flush=True)
+              except Exception as exc:
+                  print(f"{name}: {type(exc).__name__}: {str(exc)[:350]}", flush=True)
+
+          print("Read-only HTTPS diagnostic complete. No TLS verification was disabled.")
+          PY
