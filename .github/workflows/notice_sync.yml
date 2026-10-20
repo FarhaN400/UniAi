@@ -1,7 +1,13 @@
 name: UniAI - Automatic MAKAUT Notice Sync
 
+
+name: UniAI - Automatic MAKAUT Notice Sync
+
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 */3 * * *"
+
 
 permissions:
   contents: read
