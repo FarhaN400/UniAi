@@ -23,8 +23,8 @@ jobs:
       ATLAS_PROJECT_ID: ${{ vars.ATLAS_PROJECT_ID }}
       LLM_PROVIDER: groq
       GROQ_MODEL: openai/gpt-oss-20b
-      SYNC_PROCESS_LIMIT: "0"
-      SYNC_INDEX_LIMIT: "0"
+      SYNC_PROCESS_LIMIT: "1"
+      SYNC_INDEX_LIMIT: "1"
       SYNC_RECHECK_EXISTING: "0"
       SYNC_MAX_ATTEMPTS: "4"
       AUTO_APPROVE_LONG_NOTICES: "0"
