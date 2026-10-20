@@ -3,17 +3,18 @@
 > **University AI Assistant (UniAI) — MAKAUT**  
 > Vectorizing structured university intelligence, Pinecone integrated embedding indexing, year-aware metadata tagging, and MongoDB synchronization.
 
-Module 3 converts the structured JSON intelligence produced by **Module 2** into a searchable vector knowledge base in **Pinecone**. It pulls verified processed circulars from MongoDB, synthesizes a retrieval-optimized text representation capturing key dates, fees, and action items, indexes them with year-aware metadata into Pinecone's serverless vector store, and tracks indexing status back in MongoDB.
+Module 3 converts the structured JSON intelligence produced by **Module 2** into a high-performance vector knowledge base in **Pinecone**. It queries verified processed circulars from MongoDB, synthesizes a retrieval-optimized text representation capturing critical dates, fees, actions, and key points, indexes them with year-aware metadata into Pinecone's serverless vector store, and synchronizes the indexing state back into MongoDB.
 
 ---
 
 ## 🎯 Key Objectives
 
 1. **Semantic Vector Knowledge Layer:** Enables semantic search over official university notices, allowing students to retrieve circulars based on conceptual intent rather than rigid keyword matching.
-2. **Comprehensive Retrieval Text Construction:** Aggregates notice title, type, summary, required actions, key points, start/last dates, and fee amounts into a clean, newline-separated text block.
-3. **Year-Aware Metadata Tagging:** Extracts 4-digit academic and calendar years from issue dates and titles, tagging records in Pinecone to support strict temporal filtering in Module 4.
-4. **Quality-Controlled Ingestion:** Filters out documents flagged for human review (`quality_review_required: True`), indexing only thoroughly validated structured notices.
-5. **Idempotent Synchronization:** Tracks `pinecone_indexed: True` and timestamp in MongoDB, preventing duplicate upserts while providing complete reindexing capabilities (`reindex=True`).
+2. **Comprehensive Retrieval Text Construction (`build_retrieval_text`):** Aggregates notice title, category, summary, required actions, all key points, start/last dates, and official fee amounts into an information-dense text representation.
+3. **Year-Aware Metadata Tagging (`extract_year`):** Extracts 4-digit academic and calendar years (e.g. `2025`, `2026`) from issue dates and titles, tagging records in Pinecone to support strict temporal filtering in Module 4.
+4. **Integrated Pinecone Embeddings:** Leverages Pinecone's serverless `upsert_records` API, which automatically embeds the document text into dense vectors upon ingestion.
+5. **Quality-Controlled Ingestion:** Filters out circulars flagged for human review (`quality_review_required: True`), indexing only thoroughly validated structured notices.
+6. **Idempotent Synchronization:** Tracks `pinecone_indexed: True` and timestamp in MongoDB, preventing duplicate upserts while providing complete reindexing capabilities (`reindex=True`).
 
 ---
 
@@ -25,6 +26,7 @@ Module 3 converts the structured JSON intelligence produced by **Module 2** into
                                 │
                                 ▼
                    Fetch Eligible Documents
+             (query: pinecone_indexed is false/missing)
                                 │
                                 ▼
                      build_retrieval_text()
@@ -61,7 +63,7 @@ Module 3 converts the structured JSON intelligence produced by **Module 2** into
 
 ## 🧠 Retrieval Text Construction (`build_retrieval_text`)
 
-The text representation indexed into Pinecone is engineered to maximize retrieval relevance for common student queries:
+The text representation indexed into Pinecone is engineered to maximize retrieval relevance for student queries:
 
 ```python
 def build_retrieval_text(notice):
@@ -189,19 +191,39 @@ if result.matched_count != 1:
 
 ---
 
-## 📂 File Structure
+## 🔍 Semantic Search Verification (`search.py`)
+
+A standalone verification utility `search.py` is provided to test semantic retrieval and similarity scores from the terminal:
+
+```python
+from main import index
+
+def search_notices(question, top_k=3):
+    results = index.search_records(
+        namespace="notices",
+        query={
+            "inputs": {"text": question},
+            "top_k": top_k
+        }
+    )
+    # Deduplicates hits by normalized title and prints score ranking
+```
+
+---
+
+## 📂 Source Code Files
 
 | File | Description |
 |---|---|
-| [`main.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module3/main.py) | **Vector Ingestion Engine:** Retrieval text compiler, year extractor, Pinecone serverless upsert client, MongoDB status synchronizer, and batch summary reporter. |
-| [`search.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module3/search.py) | **Vector Search Verification Utility:** Standalone query tester using `index.search_records`, title deduplication, and score ranking. |
-| `Readme.md` | Comprehensive module documentation and architecture guide. |
+| [`main.py`](main.py) | **Vector Ingestion Engine:** Retrieval text compiler, year extractor, Pinecone serverless upsert client, MongoDB status synchronizer, and batch summary reporter. |
+| [`search.py`](search.py) | **Vector Search Verification Utility:** Standalone query tester using `index.search_records`, title deduplication, and score ranking. |
+| [`Readme.md`](Readme.md) | Module 3 technical documentation and architecture guide. |
 
 ---
 
 ## ⚙️ Environment Configuration
 
-Module 3 requires credentials in the root `.env` file:
+Set the following credentials in your root `.env` file:
 
 ```env
 MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority
@@ -214,8 +236,14 @@ PINECONE_API_KEY=pcsk_...
 
 ### 1. Ingest Processed Notices into Pinecone
 
+From the project root:
 ```bash
-cd /Users/farhanakhtar/Desktop/Project/UniAi/Module3
+python3 backend/Module3/main.py
+```
+
+From the module directory:
+```bash
+cd backend/Module3
 python3 main.py
 ```
 
@@ -246,7 +274,7 @@ Failed         : 0
 Test semantic retrieval directly from the terminal:
 
 ```bash
-python3 search.py
+python3 backend/Module3/search.py
 ```
 
 **Example Output:**

@@ -1,128 +1,167 @@
 # 🌐 Module 1 — Automatic University Notice Collection & Portal Monitoring
 
-> **University AI Assistant — MAKAUT**  
-> Continuous, automated monitoring of official university notice boards with deterministic deduplication and database-level idempotency.
+> **University AI Assistant (UniAI) — MAKAUT**  
+> Continuous, automated monitoring of official university notice boards with deterministic deduplication, database-level idempotency, and in-place PDF content change detection.
 
-Module 1 is the entry point of the **UniAI** pipeline. It automatically monitors the official MAKAUT notice portal, detects newly published notices without requiring manual document uploads, extracts essential notice metadata and URLs, and persists them into MongoDB.
+Module 1 is the ingestion entry point of the **UniAI** pipeline. It continuously scans the official Maulana Abul Kalam Azad University of Technology (MAKAUT) notice portal, discovers newly published circulars without requiring manual document uploads, extracts essential notice metadata and URLs, detects in-place PDF revisions, and persists records into MongoDB.
 
 ---
 
-## 🎯 Objective
+## 🎯 Key Objectives
 
-Traditional university information systems require administrators to manually upload notices and PDFs. Module 1 eliminates this manual overhead:
-1. **Automated Monitoring:** Periodically scans the official university notices page.
-2. **Deterministic Deduplication:** Generates unique cryptographic identifiers for each notice.
-3. **Database Idempotency:** Stores notices in MongoDB using upserts and unique indexes, guaranteeing that repeated runs never duplicate records or overwrite initial detection timestamps.
-4. **Handoff to Module 2:** Flags new documents with `status: "new"`, ready for downstream PDF download, OCR, and LLM structuring.
+1. **Automated Monitoring:** Periodically inspects the official university notice board (`https://makautwb.ac.in/page.php?id=340`) for newly posted circulars.
+2. **Deterministic Deduplication:** Computes cryptographic SHA-256 identifiers from normalized notice URLs, guaranteeing document identity across pipeline stages.
+3. **Database Idempotency:** Stores notices in MongoDB using atomic upsert operations (`$setOnInsert`) and unique indexes, ensuring that repeated runs never duplicate records or overwrite initial detection timestamps.
+4. **In-Place PDF Revision Detection:** Checks existing processed notice PDFs using streaming SHA-256 content hashing (`_pdf_digest`) to detect circulars updated at the same URL without a URL change.
+5. **Clean Pipeline Handoff:** Flags new and updated circulars with `status: "new"`, ready for downstream PDF acquisition, OCR, and structured information extraction in **Module 2**.
 
 ---
 
 ## 🏗️ Architecture & Workflow
 
 ```text
-                      MAKAUT Notice Portal
-               (https://makautwb.ac.in/page.php?id=340)
-                                │
-                                ▼
+                       MAKAUT Notice Portal
+                (https://makautwb.ac.in/page.php?id=340)
+                                 │
+                                 ▼
                        HTTP GET Request
-                     (requests with timeout)
-                                │
-                                ▼
-                         HTML Parsing
-                   (BeautifulSoup4 / lxml)
-                                │
-                                ▼
-                   Notice Tag Identification
-                    (a.text-danger[href])
-                                │
-                                ▼
-               Extract Title, URL, and "NEW" Badge
-                - urljoin(BASE_URL, href)
-                - Check sibling <img> for 'new-08-june'
-                                │
-                                ▼
-                  Deterministic SHA-256 Hashing
-                  notice_id = SHA256(notice_url)
-                                │
-                                ▼
-                    MongoDB Upsert Operation
-                  (Collection: university_documents)
-               Match: {"notice_id": notice["notice_id"]}
-             Update: {"$setOnInsert": notice, upsert=True}
-                                │
-                ┌───────────────┴───────────────┐
-                ▼                               ▼
-       Genuinely New Notice            Existing Notice
-        - status: "new"                 - Untouched
-        - detected_at: UTC timestamp    - Preserves original timestamp
-        - Handoff to Module 2           - Ignored
+                  (requests with 25s timeout)
+                                 │
+                                 ▼
+                          HTML Parsing
+                     (BeautifulSoup4 / lxml)
+                                 │
+                                 ▼
+                    Notice Tag Identification
+                      (a.text-danger[href])
+                                 │
+                                 ▼
+                Extract Title, URL, and "NEW" Badge
+                 - urljoin(BASE_URL, href)
+                 - Verify official MAKAUT hostname
+                 - Check sibling <img> for 'new-08-june'
+                                 │
+                                 ▼
+                   Deterministic SHA-256 Hashing
+                   notice_id = SHA256(notice_url)
+                                 │
+                                 ▼
+                     MongoDB Upsert Operation
+                   (Collection: university_documents)
+                Match: {"notice_id": notice["notice_id"]}
+                Update: {"$setOnInsert": payload, "$set": refresh_fields}
+                                 │
+                 ┌───────────────┴───────────────┐
+                 ▼                               ▼
+        Genuinely New Notice            Existing Notice
+         - status: "new"                 - Preserves initial detected_at
+         - detected_at: UTC timestamp    - Updates last_seen_at
+         - Handoff to Module 2           - Updates flagged_new_on_site
+                                                 │
+                                                 ▼
+                                     Optional In-Place Check
+                                  recheck_existing_pdf_versions()
+                                  (Compares PDF SHA-256 checksum)
 ```
 
 ---
 
 ## 🔍 Site Investigation & HTML Extraction
 
-During initial portal analysis, several endpoints were inspected:
+During portal inspection, MAKAUT notice endpoints were analyzed:
 
-| Endpoint | Result | Notes |
+| Endpoint | Result | Purpose in UniAI |
 |---|---|---|
-| `makautexam.net` | Secondary portal | Plain `<a>` tags, exam-specific updates |
-| `www.makautwb.ac.in` (root) | Dynamic / JS-rendered | Requires headless browser (Selenium/Playwright) |
-| `makautwb.ac.in/page.php?id=340` | **Primary server-rendered notice board** | **Target source:** Contains ~180+ notices in pure HTML |
+| `makautwb.ac.in/page.php?id=340` | **Primary server-rendered notice board** | **Target source:** Pure HTML table containing official circulars, exam notices, and admission updates. |
+| `makautexam.net` | Secondary examination portal | Exam schedules, routine downloads, and admit cards. |
+| `www.makautwb.ac.in` (root) | Dynamic landing portal | University announcements and homepage banners. |
 
 ### Confirmed HTML Pattern
 
 On the target notice page, notices follow a distinct DOM structure:
 
 ```html
-<a class="text-danger" href="datas/users/0-file.pdf">
-    <font color="blue">Notice Title Text</font>
+<a class="text-danger" href="datas/users/0-exam_schedule_2026.pdf">
+    <font color="blue">Notice Regarding Semester Examination Form Fill-up 2026</font>
 </a>
 &nbsp;
 <img src="images/new-08-june.gif" border="0">
 <br/><br/>
 ```
 
-- **Notice Links:** Always have the CSS class `a.text-danger[href]`.
-- **URL Resolution:** Links appear in relative (`datas/...`), root-relative (`/datas/...`), and absolute formats. All URLs are normalized using `urllib.parse.urljoin`.
-- **New Indicator:** When a flashing "NEW" gif badge (`images/new-08-june.gif`) is present as a sibling image, `flagged_new_on_site` is set to `True`.
+- **Notice Links:** Always styled with CSS class `a.text-danger[href]`.
+- **URL Resolution:** Links appear as relative (`datas/...`), root-relative (`/datas/...`), or absolute URLs. All paths are resolved via `urllib.parse.urljoin(BASE_URL, href)`.
+- **Domain Verification:** URLs are validated to ensure they originate strictly from official MAKAUT domains (`makautwb.ac.in` or `www.makautwb.ac.in`).
+- **"NEW" Indicator:** When a flashing "NEW" gif badge (`images/new-08-june.gif`) is present as an adjacent sibling image, `flagged_new_on_site` is set to `True`.
 
 ---
 
 ## 🔐 Deterministic Notice Identification & Idempotency
 
 ### 1. SHA-256 Unique Identifier
-Each notice receives a deterministic `notice_id` computed from its normalized URL:
+Each notice receives an immutable, deterministic `notice_id` computed from its normalized URL:
 
 ```python
-notice["notice_id"] = hashlib.sha256(notice["url"].encode()).hexdigest()
+notice["notice_id"] = hashlib.sha256(notice["url"].encode("utf-8")).hexdigest()
 ```
 
-- Deterministic hashing ensures that the same URL always yields the exact same 64-character hexadecimal ID.
-- Prevents collisions and acts as the document primary key.
+- Deterministic hashing guarantees that the same URL always yields the exact same 64-character hexadecimal ID.
+- Acts as the primary database key and vector reference across all modules.
 
 ### 2. MongoDB Upsert with `$setOnInsert`
-To ensure the monitor can run every 30 minutes without corrupting data or resetting detection dates:
+To ensure the crawler can run on a schedule (e.g., every 3 hours via GitHub Actions) without corrupting existing records or resetting extraction progress:
 
 ```python
 notices_collection.create_index("notice_id", unique=True)
 
 result = notices_collection.update_one(
     {"notice_id": notice["notice_id"]},
-    {"$setOnInsert": notice},
-    upsert=True
+    {
+        "$setOnInsert": {
+            **insert_only,
+            "detected_at": now,
+            "status": "invalid" if invalid else "new",
+            "pinecone_indexed": False,
+            "processing_attempts": 0,
+        },
+        "$set": {
+            "last_seen_at": now,
+            "flagged_new_on_site": notice["flagged_new_on_site"],
+        },
+    },
+    upsert=True,
 )
 ```
 
-- **`upsert=True`**: Inserts the document if it does not exist; skips if it already exists.
-- **`$setOnInsert`**: Fields (such as `detected_at` and `status: "new"`) are written **only** on initial insertion. Subsequent runs do not overwrite existing progress.
-- **Unique Index**: Enforces database-level uniqueness, preventing race conditions or duplicate entries even under concurrent executions.
+- **`$setOnInsert`**: Sets initial metadata (`status: "new"`, `detected_at`, `pinecone_indexed: False`, `processing_attempts: 0`) **only** when a new notice is first inserted.
+- **`$set`**: Refreshes dynamic fields (`last_seen_at` and `flagged_new_on_site`) without touching `status: "processed"` or structured extraction outputs.
+- **Unique Index**: Database-level unique constraint on `notice_id` prevents duplicate insertions under concurrent or repeated executions.
 
 ---
 
-## 🛡️ Fault Tolerance & Invalid Notice Handling
+## 📄 In-Place PDF Content Revision Detection
 
-Corrupt PDFs or broken links published on the university portal are handled gracefully:
+University administrators occasionally replace the contents of an existing notice PDF without changing its URL. Module 1 provides streaming hash verification to detect these updates:
+
+```python
+def _pdf_digest(url):
+    """Compute SHA-256 checksum of an official PDF via streaming with magic-byte check."""
+    # Enforces HTTPS, 25 MB max size, and %PDF- header validation
+...
+
+def recheck_existing_pdf_versions(limit=0):
+    """Check a bounded sample of processed PDF hashes against live portal content."""
+```
+
+- **Streaming Verification:** Downloads the PDF in 64 KB chunks up to a 25 MB limit without saving large files to disk.
+- **Magic-Byte Check:** Confirms the file begins with `%PDF-`.
+- **Change Handling:** If the newly calculated SHA-256 hash differs from the stored `pdf_sha256`, the notice status is reset to `"new"`, `pinecone_indexed` is reset to `False`, and `content_change_detected_at` is stamped for re-extraction by Module 2.
+
+---
+
+## 🛡️ Fault Tolerance & Known Invalid Notice Quarantine
+
+Corrupted files or broken links published on the university portal are handled gracefully:
 
 ```python
 INVALID_NOTICE_IDS = {
@@ -130,15 +169,14 @@ INVALID_NOTICE_IDS = {
 }
 ```
 
-- Known invalid notices are automatically flagged with `status: "invalid"`.
-- Error diagnostics (`processing_error`, `invalid_pdf_url`) are logged in the document.
-- Downstream modules (Module 2, 3, 4) query only `status: "new"` or `status: "processed"`, preventing pipeline failures.
+- Known invalid notice IDs are automatically flagged with `status: "invalid"` and logged with `processing_error`.
+- Downstream modules (Module 2, Module 3, Module 4) query only eligible statuses, preventing pipeline halts.
 
 ---
 
 ## 🗄️ MongoDB Document Schema
 
-When a notice is first inserted by Module 1, it has the following schema:
+When a notice is first ingested by Module 1, its document in the `university_documents` collection appears as follows:
 
 ```json
 {
@@ -148,34 +186,36 @@ When a notice is first inserted by Module 1, it has the following schema:
   "url": "https://makautwb.ac.in/datas/users/0-exam_form_2026.pdf",
   "flagged_new_on_site": true,
   "status": "new",
-  "detected_at": "2026-09-07T20:01:44.833Z"
+  "detected_at": "2026-09-07T20:01:44.833Z",
+  "last_seen_at": "2026-09-07T20:01:44.833Z",
+  "pinecone_indexed": false,
+  "processing_attempts": 0
 }
 ```
 
-### Document Status Lifecycle
+### Document Status Progression
 
 ```text
-status: "new"       ──(Module 2)──►  status: "processed"  ──(Module 3)──►  pinecone_indexed: True
-       │                                     │
-       ▼                                     ▼
-status: "invalid"                     status: "error"
+status: "new"  ──(Module 2)──►  status: "processed"  ──(Module 3)──►  pinecone_indexed: true
+      │                                │
+      ▼                                ▼
+status: "invalid"               status: "failed" (retried up to MAX_ATTEMPTS)
 ```
 
 ---
 
-## 📂 File Structure
+## 📂 Source Code Files
 
-| File | Purpose |
+| File | Description |
 |---|---|
-| [`scrapper.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module1/scrapper.py) | Main scraper script: portal HTTP fetch, HTML parsing, hashing, and MongoDB upsert |
-| [`module1-revision-notes.md`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module1/module1-revision-notes.md) | Technical revision notes, site investigation logs, and interview prep |
-| `README.md` | Comprehensive module documentation and guide |
+| [`scrapper.py`](scrapper.py) | **Main Monitor Script:** Portal crawler, HTML parser, SHA-256 hasher, MongoDB upsert, and in-place PDF revision checker. |
+| [`README.md`](README.md) | Module 1 technical documentation and operational guide. |
 
 ---
 
 ## ⚙️ Environment Configuration
 
-Module 1 requires a MongoDB connection string defined in the root `.env` file:
+Module 1 requires a MongoDB Atlas connection string in your root `.env` file:
 
 ```env
 MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority
@@ -185,49 +225,43 @@ MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=
 
 ## ▶️ How to Run
 
-### 1. Run the Scraper
+### 1. Run from the Repository Root
 
 ```bash
-cd /Users/farhanakhtar/Desktop/Project/UniAi/Module1
+python3 backend/Module1/scrapper.py
+```
+
+### 2. Run from the Module Directory
+
+```bash
+cd backend/Module1
 python3 scrapper.py
 ```
 
-### 2. Expected Output
+### 3. Programmatic Invocation
 
-On initial run (empty database):
-```text
-Checking university portal...
+```python
+from backend.Module1.scrapper import run_monitor_cycle, recheck_existing_pdf_versions
 
-Found 187 notices on the page.
-Existing notices: 0
-New notices: 187
+# Run discovery
+report = run_monitor_cycle()
+print(report)  # {'seen': 187, 'new': 2, 'existing': 185}
 
-NEW:
-- Notice Regarding Semester Examination Form Fill-up 2026
-  https://makautwb.ac.in/datas/users/0-exam_form_2026.pdf
-...
-```
-
-On subsequent runs (no changes on portal):
-```text
-Checking university portal...
-
-Found 187 notices on the page.
-Existing notices: 187
-New notices: 0
-
-No new notices this run.
+# Check for in-place PDF updates
+recheck_report = recheck_existing_pdf_versions(limit=5)
+print(recheck_report)  # {'checked': 5, 'changed': 0, 'errors': 0}
 ```
 
 ---
 
 ## ✅ Validation Checklist
 
-- [x] Portal HTML fetched successfully with timeout protection.
-- [x] Links resolved cleanly to absolute URLs via `urllib.parse.urljoin`.
-- [x] Deterministic SHA-256 notice IDs prevent duplicate records.
-- [x] MongoDB collection `university_documents` enforces unique index on `notice_id`.
-- [x] Upsert logic uses `$setOnInsert` to preserve initial `detected_at` timestamps.
-- [x] Known broken/invalid notice URLs isolated with `status: "invalid"`.
-- [x] Verified zero duplicates across repeated runs (idempotency confirmed).
-- [x] Clean handoff: new notices stored with `status: "new"` for Module 2.
+- [x] Portal HTML fetched cleanly with timeout protection (25s).
+- [x] Links verified strictly against official MAKAUT domains (`makautwb.ac.in`).
+- [x] URLs resolved to absolute addresses via `urllib.parse.urljoin`.
+- [x] Deterministic SHA-256 identifier (`notice_id`) guarantees record deduplication.
+- [x] MongoDB collection `university_documents` enforces a unique index on `notice_id`.
+- [x] Atomic upsert (`$setOnInsert`) preserves initial `detected_at` timestamps across runs.
+- [x] In-place PDF content change detection (`_pdf_digest`) monitors modified circulars.
+- [x] Known broken/corrupt circulars quarantined under `status: "invalid"`.
+- [x] Clean handoff: new circulars saved with `status: "new"` for Module 2.

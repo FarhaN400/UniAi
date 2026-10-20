@@ -1,20 +1,23 @@
-# 📄 Module 2 — Document Processing & Structured Extraction
+# 📄 Module 2 — Document Processing & Structured Intelligence Extraction
 
 > **University AI Assistant (UniAI) — MAKAUT**  
-> Automated PDF acquisition, high-fidelity OCR enhancement, Pydantic schema validation, and LLM-powered structured intelligence extraction with chunking and fault tolerance.
+> Automated PDF acquisition, dual text extraction (digital extraction + high-resolution OCR), Pydantic V2 schema validation, dual LLM provider support (Ollama & Groq), and deterministic chunk merging with fault tolerance.
 
-Module 2 transforms raw university notices scraped in Module 1 into clean, machine-searchable structured JSON. It pulls unprocessed notices (`status: "new"`) from MongoDB, downloads and verifies the official PDF files, cleans optical character recognition (OCR) artifacts, splits long circulars into chunks, extracts structured entities using **Qwen 3 4B-Instruct** (via Ollama), validates outputs against strict Pydantic schemas, and persists the extracted intelligence back into MongoDB.
+Module 2 transforms raw university notices pulled by **Module 1** into clean, machine-searchable, structured JSON intelligence. It pulls pending circulars (`status: "new"`) from MongoDB, downloads and verifies the official PDF files, cleans optical character recognition (OCR) artifacts, segments long notices into chunks, extracts structured entities using **Qwen 3 4B-Instruct** (via Ollama) or **GPT / Llama models** (via Groq), validates outputs against strict Pydantic schemas, and persists the extracted intelligence back into MongoDB.
 
 ---
 
 ## 🎯 Key Objectives
 
-1. **Automated End-to-End Pipeline:** Eliminates manual document inspection by continuously pulling new notices from MongoDB, streaming PDFs to temporary storage, and cleaning up disk space automatically.
-2. **Enhanced OCR Pipeline:** Renders PDF pages at 300 DPI with grayscale conversion, contrast enhancement, layout segmentation, and regex corrections for font slant and date spacing errors.
-3. **Strict Structured Extraction:** Maps free-form circulars into a deterministic JSON schema featuring 10 core dimensions: notice type, title, reference number, issue date, target audience, important dates, fees, required actions, key points, and issuing authority.
-4. **Pydantic Validation (`schema.py`):** Enforces strict data models (`ConfigDict(extra="forbid")`) with custom field validators to eliminate hallucinated fields or malformed data types.
+1. **Automated End-to-End Pipeline:** Continuously pulls new circulars from MongoDB, streams PDFs to temporary storage with magic-byte validation (`%PDF-`), and safely cleans up disk space in `finally:` blocks.
+2. **Dual-Path Text Extraction (`ocr.py`):**
+   - **Direct Digital Text Extraction (`extract_pdf_text`):** Attempts native digital extraction via `pypdf.PdfReader` first (instant, 100% accurate, no image conversion overhead).
+   - **High-Res OCR Fallback (`ocr_extract_pdf`):** If the PDF is scanned or yields insufficient text (< 80 characters), automatically renders pages at 300 DPI, converts to grayscale, applies 1.5x contrast enhancement, and reads via Tesseract OCR (`--oem 3 --psm 6`).
+3. **Advanced Optical Noise Normalization:** Regex cleaning removes university crest artifacts, repairs spurious spaces in dates (`01.1 0.2026` $\rightarrow$ `01.10.2026`), and fixes slanted font misreads (`JJ a.m.` $\rightarrow$ `11 a.m.`).
+4. **Strict Pydantic Contract (`schema.py`):** Enforces 10 structured dimensions (`ConfigDict(extra="forbid")`) with field validators to eliminate hallucinated fields or malformed data types.
 5. **Intelligent Chunking for Long Circulars:** Automatically detects long notices (> 7,000 characters), segments them along paragraph boundaries (`CHUNK_SIZE = 2,500`), extracts information per chunk, and merges results deterministically.
-6. **Multi-State Quality Tracking:** Categorizes documents into `processed`, `review_required` (for long notices requiring human inspection), `invalid` (for non-PDF or corrupt links), or `new` (upon retryable failures).
+6. **Dual LLM Provider Support:** Seamlessly switches between local execution (**Ollama** with `qwen3:4b-instruct`) and cloud inference (**Groq** with `openai/gpt-oss-20b` or custom models).
+7. **Fault-Tolerant Lease Management:** Uses atomic lease claiming (`find_one_and_update`), 1-hour lease expiration for crash recovery, exponential backoff retries, and quarantine to `status: "invalid"` after exhausting configured attempts.
 
 ---
 
@@ -24,25 +27,36 @@ Module 2 transforms raw university notices scraped in Module 1 into clean, machi
                        MongoDB: university_documents
                                      │
                                      ▼
-                          Find status == "new"
+                    Atomic Lease Claim (_eligible_processing_query)
+                       - status: "new" OR retryable "failed"
+                       - status set to "processing" with timestamp
                                      │
                                      ▼
-                           Download PDF to Temp
-                         Validate Magic Bytes (%PDF-)
+                            Download PDF to Temp
+                          Validate Magic Bytes (%PDF-)
                                      │
                     ┌────────────────┴────────────────┐
                     ▼                                 ▼
              Valid PDF File                     Invalid PDF File
-                    │                        - status: "invalid"
-                    ▼                        - processing_error
-            ocr.py (High-Res OCR)            - invalid_pdf_url
-          - Render at 300 DPI
-          - Grayscale + Contrast (1.5x)
-          - Tesseract (--oem 3 --psm 6)
-          - clean_ocr_text() Normalization
+                    │                        - Retry with backoff
+                    ▼                        - If attempts >= 4:
+           Dual-Path Text Extraction           status: "invalid"
+                    │                        - invalid_pdf_url
+          ┌─────────┴─────────┐
+          ▼                   ▼
+    Digital PDF         Scanned PDF
+  (pypdf.PdfReader)   (300 DPI + Contrast
+  Instant extraction    + Tesseract PSM 6)
+          │                   │
+          └─────────┬─────────┘
+                    ▼
+          clean_ocr_text() Normalization
+          - Slanted font repair (JJ -> 11)
+          - Date spacing correction
+          - Logo noise trimming
                     │
                     ▼
-            Cleaned Document Text
+            Clean Document Text
                     │
          ┌──────────┴──────────┐
          ▼                     ▼
@@ -61,7 +75,7 @@ Module 2 transforms raw university notices scraped in Module 1 into clean, machi
          └──────────┬──────────┘
                     ▼
      Structured Extraction Pipeline
-   (Prompt + Qwen 3 4B-Instruct + Parser)
+   (Prompt + LLM [Ollama/Groq] + JsonOutputParser)
                     │
                     ▼
        Pydantic Schema Validation
@@ -73,21 +87,37 @@ Module 2 transforms raw university notices scraped in Module 1 into clean, machi
          ▼                     ▼
     Short Notice          Long Notice
   - status: "processed" - status: "review_required"
-  - quality_review: false - quality_review: true
-  - structured_data     - chunk_extractions
-                        - pinecone_indexed: false
+  - structured_data     - quality_review: true
+  - pinecone_indexed: F   (or auto-approved if clean)
+                        - chunk_extractions
                     │
                     ▼
-       Delete Temporary PDF File (finally)
+       Delete Temporary PDF File (finally:)
 ```
 
 ---
 
-## 🔍 OCR Improvements & Normalization (`ocr.py`)
+## 🔍 Dual-Path Text Extraction & OCR Normalization (`ocr.py`)
 
-MAKAUT circulars frequently contain low-resolution scans, italicized fonts, and complex emblems that challenge standard OCR:
+MAKAUT circulars range from digitally authored PDFs to low-resolution photocopies. Module 2 handles both efficiently:
 
-### 1. Preprocessing & Image Enhancement
+### 1. Direct PDF Extraction with OCR Fallback
+```python
+def extract_pdf_text(pdf_path):
+    """Attempt direct digital extraction first; fallback to OCR if scanned."""
+    try:
+        reader = PdfReader(pdf_path)
+        extracted = [page.extract_text() for page in reader.pages if page.extract_text()]
+        direct_text = "\n".join(extracted).strip()
+        if len(direct_text) > 80:
+            return clean_ocr_text(direct_text)
+    except Exception:
+        pass
+    return ocr_extract_pdf(pdf_path)
+```
+
+### 2. High-Resolution OCR Pipeline (`ocr_extract_pdf`)
+When scanned documents are detected:
 ```python
 images = convert_from_path(pdf_path, dpi=300)
 for img in images:
@@ -95,21 +125,21 @@ for img in images:
     enhanced_img = ImageEnhance.Contrast(gray_img).enhance(1.5)
     text = pytesseract.image_to_string(enhanced_img, config="--oem 3 --psm 6")
 ```
-- **300 DPI Rendering:** Significantly improves recognition of fine print, fractions, and academic reference numbers.
-- **Grayscale + 1.5x Contrast:** Eliminates paper discoloration and faint background artifacts.
-- **PSM 6 (Single Uniform Block):** Improves column and tabular line reading over standard page segmentation.
+- **300 DPI Rendering:** Resolves fine print, small table numbers, and reference numbers.
+- **Grayscale + 1.5x Contrast:** Strips background discoloration and paper stains.
+- **PSM 6 (Single Uniform Block):** Optimized for structured academic notifications and tabular dates.
 
-### 2. Optical Noise & Font Correction (`clean_ocr_text`)
-- **Slanted-Font Time Corrections:** In MAKAUT notices, timings like *"between 11 a.m. to 4 p.m."* are often typeset in slanted serif fonts where `11` is misread as `JJ`, `J/`, or `Il`. Regex patterns normalize `(JJ|J/|J\]|Il|1l|II|ll) a.m.` $\rightarrow$ `11 a.m.`.
-- **Date Spacing Glitches:** OCR engines occasionally insert spurious spaces inside dates (e.g. `01.1 0.2026` $\rightarrow$ `01.10.2026`). Regex normalizes these into valid date strings.
-- **University Logo Noise Removal:** Trims noise lines generated from circular university emblems (e.g., `oyna ams waa nan`, `(eel`) that appear above the official header (`MAULANA ABUL KALAM AZAD UNIVERSITY...`).
-- **Short-Line Preservation:** Preserves numbered points, short dates, and numerical values while filtering out isolated non-alphabetic artifacts.
+### 3. Optical Noise & Regex Normalization (`clean_ocr_text`)
+- **Slanted-Font Time Corrections:** In circulars typeset with slanted serif fonts, `11` is frequently misread as `JJ`, `J/`, `Il`, or `ll`. Normalized via `(?i)\b(JJ|J/|J\]|Il|1l|II|ll)\s*([ap]\.?m\.?)` $\rightarrow$ `11 \2`.
+- **Date Spacing Glitches:** Repairs spaces inserted into dates (`01.1 0.2026` $\rightarrow$ `01.10.2026`).
+- **University Crest Artifacts:** Trims noise lines generated by the university logo emblem appearing above the main header (`MAULANA ABUL KALAM AZAD UNIVERSITY...`).
+- **Line Preservation:** Preserves numbered points, short dates, and fee figures rather than discarding short lines indiscriminately.
 
 ---
 
 ## 📐 Pydantic Data Contract (`schema.py`)
 
-To ensure data integrity, extraction outputs are strictly validated by Pydantic models before being stored in MongoDB:
+Extraction outputs are validated against strict Pydantic V2 schemas before database storage:
 
 ```python
 class ImportantDates(BaseModel):
@@ -152,12 +182,12 @@ class NoticeSchema(BaseModel):
 ```
 
 - **`extra="forbid"`:** Disallows hallucinated fields outside the university contract.
-- **Type Literal for `notice_type`:** Standardizes classification across 7 strict categories.
-- **Mandatory Sub-Objects:** Guarantees `fees` and `important_dates` are always dictionaries with required keys, even if their internal values are `null`.
+- **7-Type Categorization:** Categorizes circulars into standardized types (`Examination`, `Admission`, `Scholarship`, etc.).
+- **Sub-Object Guarantees:** Ensures `fees` and `important_dates` are always structured sub-dictionaries, even when specific values are `null`.
 
 ---
 
-## 🧩 Long Notice Handling & Chunk Merging (`main.py`)
+## 🧩 Intelligent Chunking & Deterministic Merging (`main.py`)
 
 When circulars exceed `SHORT_TEXT_LIMIT = 7000` characters:
 1. **Paragraph-Preserving Splitting (`split_text`):** Breaks text into chunks of at most 2,500 characters, respecting paragraph boundaries (`\n\n`) and line breaks.
@@ -167,7 +197,17 @@ When circulars exceed `SHORT_TEXT_LIMIT = 7000` characters:
    - **Issuing Authority:** Extracts signing authority from the trailing chunk.
    - **Key Points & Actions:** Aggregates unique key points and action directives across all chunks.
    - **Conflict Detection:** When chunks report conflicting dates or multiple fee amounts, the merger records candidate values in `key_points` for human verification rather than arbitrarily picking one.
-   - **Status:** Saves the document as `status: "review_required"`, sets `quality_review_required: True`, and stores raw chunk outputs in `chunk_extractions`.
+   - **Quality Control:** By default, saves the document as `status: "review_required"`, sets `quality_review_required: True`, and stores raw chunk outputs in `chunk_extractions`. If `AUTO_APPROVE_LONG_NOTICES=1` is set, notices without conflict warnings are approved automatically.
+
+---
+
+## 🛡️ Robust Lease Management & Retry Mechanism
+
+Module 2 includes production-grade lease locking for batch and automated environments:
+- **Atomic Document Lease (`find_one_and_update`):** Atomically claims an eligible document by setting `status: "processing"` and `processing_started_at`.
+- **Stale Lease Recovery:** Documents left in `"processing"` state for over 1 hour (e.g., due to an unexpected process crash) are automatically reclaimed for retry.
+- **Exponential Backoff:** Failed attempts delay subsequent retries with doubling delays: `delay = min(15 * 2^(attempt - 1), 480)` minutes.
+- **Quarantine:** After reaching `MAX_ATTEMPTS` (default 4, configurable via `SYNC_MAX_ATTEMPTS`), the circular is marked `status: "invalid"` with detailed diagnostics, preventing pipeline stalls.
 
 ---
 
@@ -181,13 +221,16 @@ Following Module 2 processing, notices in the `university_documents` collection 
   "notice_id": "c701185f86386569cd6f34f6b5d033073f410a21f74847c3f8d4f954a7fe1b77",
   "title": "Notice Regarding Semester Examination Form Fill-up 2026",
   "url": "https://makautwb.ac.in/datas/users/0-exam_form_2026.pdf",
+  "pdf_sha256": "3e9b1d75f284e9b8c...",
   "flagged_new_on_site": true,
   "detected_at": "2026-09-07T20:01:44.833Z",
   "status": "processed",
   "processed_at": "2026-09-17T12:26:55.964Z",
+  "last_content_checked_at": "2026-09-17T12:26:55.964Z",
   "extraction_model": "qwen3:4b-instruct",
   "requires_chunking": false,
   "quality_review_required": false,
+  "pinecone_indexed": false,
   "raw_text": "MAULANA ABUL KALAM AZAD UNIVERSITY OF TECHNOLOGY...",
   "structured_data": {
     "notice_type": "Examination",
@@ -217,79 +260,79 @@ Following Module 2 processing, notices in the `university_documents` collection 
 
 ---
 
-## 📂 File Structure
+## 📂 Source Code Files
 
 | File | Description |
 |---|---|
-| [`main.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module2/main.py) | **Batch Pipeline Orchestrator:** PDF downloader, magic byte validator, chunking engine, chunk merger, MongoDB updater, and summary reporter. |
-| [`ocr.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module2/ocr.py) | **OCR Preprocessing & Normalization:** 300 DPI conversion, contrast enhancement, font slant corrections (`JJ` $\rightarrow$ `11`), date normalization, and logo noise trimming. |
-| [`schema.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module2/schema.py) | **Pydantic Validation Models:** `NoticeSchema`, `ImportantDates`, and `Fees` models with strict validation rules. |
-| [`prompt.py`](file:///Users/farhanakhtar/Desktop/Project/UniAi/Module2/prompt.py) | **Prompt Engineering:** Extraction guidelines, OCR tolerance rules, classification constraints, and LangChain `JsonOutputParser`. |
-| `README.md` | Comprehensive module documentation and guide. |
+| [`main.py`](main.py) | **Batch Pipeline Orchestrator:** PDF downloader, magic-byte check, chunking engine, chunk merger, MongoDB updater, lease manager, and batch reporter. |
+| [`ocr.py`](ocr.py) | **Dual Extraction & OCR Normalization:** Direct PyPDF extraction, 300 DPI Tesseract OCR fallback, font slant corrections (`JJ` $\rightarrow$ `11`), date spaces, and crest trimming. |
+| [`schema.py`](schema.py) | **Pydantic Validation Models:** `NoticeSchema`, `ImportantDates`, and `Fees` strict data models. |
+| [`prompt.py`](prompt.py) | **Prompt Engineering:** Strict extraction instructions, JSON output parser, and field constraint definitions. |
+| [`README.md`](README.md) | Module 2 technical documentation and architecture guide. |
 
 ---
 
 ## ⚙️ Environment Configuration
 
-Module 2 requires a MongoDB connection string in the root `.env` file:
+Set the following variables in your root `.env` file:
 
 ```env
+# MongoDB Atlas
 MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority
-```
 
-### Local LLM Requirement (Ollama)
-Module 2 uses **Qwen 3 4B-Instruct** running locally via Ollama:
+# LLM Provider Selection: "ollama" (default local) or "groq" (cloud)
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=qwen3:4b-instruct
 
-```bash
-# Verify Ollama is running and pull the model
-ollama run qwen3:4b-instruct
+# Optional: Groq Cloud Configuration
+# LLM_PROVIDER=groq
+# GROQ_API_KEY=gsk_...
+# GROQ_MODEL=openai/gpt-oss-20b
+
+# Pipeline Tuning (Optional)
+SYNC_PROCESS_LIMIT=3
+SYNC_MAX_ATTEMPTS=4
+AUTO_APPROVE_LONG_NOTICES=0
 ```
 
 ---
 
 ## ▶️ How to Run
 
-### 1. Run Batch Processing
+### 1. Start Ollama (When using Local LLM)
 
 ```bash
-cd /Users/farhanakhtar/Desktop/Project/UniAi/Module2
-python3 main.py
+ollama run qwen3:4b-instruct
 ```
 
-### 2. Process a Limited Batch for Testing
-You can control the batch size in `main.py` or invoke it directly:
+### 2. Run Batch Processing from Project Root
+
+```bash
+python3 backend/Module2/main.py
+```
+
+### 3. Programmatic Invocation
 
 ```python
-from main import process_new_notices
-process_new_notices(limit=2)
-```
+from backend.Module2.main import process_new_notices
 
-### 3. Example Batch Summary Output
-
-```text
-============================================================
-UniAI Module 2 | Batch Summary
-============================================================
-Total checked   : 10
-Processed       : 8
-Review required : 1
-Failed          : 0
-Invalid PDFs    : 1
-============================================================
+# Process up to 5 notices
+report = process_new_notices(limit=5)
+print(report)  # {'selected': 5, 'processed': 4, 'review_required': 1, 'failed': 0, 'invalid': 0}
 ```
 
 ---
 
 ## ✅ Validation Checklist
 
-- [x] Downloads PDF files securely to temporary storage with magic byte validation (`%PDF-`).
-- [x] Automatically deletes temporary PDF files in `finally:` block, preventing disk bloat.
-- [x] 300 DPI rendering + contrast enhancement improves small font extraction.
-- [x] OCR font slant errors (`JJ a.m.` $\rightarrow$ `11 a.m.`) normalized cleanly.
+- [x] Downloads PDF files securely to temporary storage with magic-byte validation (`%PDF-`).
+- [x] Enforces 25 MB file size limit and deletes temporary files in `finally:` blocks.
+- [x] Direct digital PDF text extraction via `pypdf` avoids unnecessary OCR overhead.
+- [x] 300 DPI Tesseract OCR fallback handles scanned circulars with contrast enhancement (1.5x).
+- [x] OCR font slant errors (`JJ a.m.` $\rightarrow$ `11 a.m.`) corrected cleanly.
 - [x] Spaces accidentally introduced into dates (`01.1 0.2026`) repaired by regex.
 - [x] University crest and emblem artifacts trimmed above document headers.
-- [x] Pydantic models validate JSON structure and disallow extra keys.
+- [x] Pydantic models validate JSON structure and forbid hallucinated fields.
 - [x] Long documents (> 7,000 characters) chunked and merged deterministically.
-- [x] Merged conflicts in dates/fees recorded for human verification.
-- [x] Documents marked with appropriate lifecycle status (`processed`, `review_required`, `invalid`).
-- [x] Batch processing runs with per-document fault tolerance, preventing entire batch crashes.
+- [x] Dual LLM provider support: Ollama (local) and Groq (cloud).
+- [x] Fault-tolerant atomic lease claiming and exponential backoff retry logic.

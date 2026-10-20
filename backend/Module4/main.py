@@ -1,11 +1,10 @@
-
 import os
 import sys
 import re
 import json
 from datetime import datetime, date
 
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 
 if __package__:
     from .prompt import rag_prompt
@@ -47,7 +46,11 @@ from Module4.evidence import (
 )
 
 
-MODEL_NAME = "qwen3:4b-instruct"
+MODEL_NAME = os.getenv(
+    "GROQ_MODEL",
+    "llama-3.3-70b-versatile"
+)
+
 NO_RESULTS_MESSAGE = (
     "I could not find this information in the available university notices."
 )
@@ -345,20 +348,23 @@ def format_notice_list(records):
 
 
 
-model = ChatOllama(
-    model=MODEL_NAME,
-    temperature=0,
-    num_ctx=8192,
-    num_predict=1024,
-    keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
-)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq" if os.getenv("GROQ_API_KEY") else "ollama").strip().lower()
+
+if LLM_PROVIDER == "groq" and os.getenv("GROQ_API_KEY"):
+    from langchain_groq import ChatGroq
+    MODEL_NAME = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = ChatGroq(
+        model=MODEL_NAME,
+        temperature=0,
+        max_tokens=1024,
+        max_retries=2,
+    )
 
 rag_chain = rag_prompt | model
 
 state = ConversationState()
 chat_history = state.chat_history
 last_notice_records = state.last_notice_records
-last_latest_question = None
 
 
 def _sync_state():
@@ -562,6 +568,58 @@ def _claim_covers_missing_facet(claim, facet, records_by_id=None):
     return False
 
 
+def _verified_application_deadline(question, record):
+    """Answer a narrow deadline request only when record text links it to applications.
+
+    Important dates can also describe reporting or merit publication. Do not
+    interpret last_date as an application deadline without textual corroboration.
+    """
+    q = str(question or "").casefold()
+    deadline_words = re.search(
+        r"\b(?:deadline|last\s+date|closing\s+date|due\s+date|end\s+date)\b", q,
+    )
+    if not deadline_words:
+        return None
+    if re.search(r"\b(?:reporting|report|verification|merit\s+list|fee\s+payment)\b", q):
+        return None  # Other dates must be answered from their own evidence.
+
+    info = record.get("structured_data") or {}
+    dates = info.get("important_dates") or {}
+    deadline = str(dates.get("last_date") or "").strip()
+    if not re.fullmatch(r"\d{2}[-/]\d{2}[-/]20\d{2}|20\d{2}-\d{2}-\d{2}", deadline):
+        return None
+    date_formats = ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d")
+    if not any(_valid_deadline_date(deadline, fmt) for fmt in date_formats):
+        return None
+
+    details = [str(info.get("action_required") or "")]
+    points = info.get("key_points") or []
+    if isinstance(points, list):
+        details.extend(str(p) for p in points)
+    else:
+        details.append(str(points))
+    # Require the specific last date in a sentence explicitly about applying.
+    if not any(deadline in detail and re.search(
+        r"\b(?:apply|applying|applications?|submit|submission)\b",
+        detail, re.I,
+    ) for detail in details):
+        return None
+
+    if re.search(r"\b(?:applications?|apply|applying|submission)\b", q):
+        return f"The last date to apply online is {deadline}."
+    # Generic 'what is its deadline?' is safe only because the same record
+    # explicitly identifies its last_date as an application deadline.
+    return f"The application deadline is {deadline}."
+
+
+def _valid_deadline_date(value, fmt):
+    try:
+        datetime.strptime(value, fmt)
+        return True
+    except ValueError:
+        return False
+
+
 def answer_from_records(question, records, active_notice=None, current_state=None):
     """Generate an answer using the supplied notices and recent conversation."""
     st = current_state if current_state is not None else state
@@ -590,6 +648,28 @@ def answer_from_records(question, records, active_notice=None, current_state=Non
         if st is state:
             _sync_back()
         return NO_RESULTS_MESSAGE
+
+    # Phase 4: deterministic, sourced reply for verified application deadlines.
+    # This prevents the LLM from adding an academic-session year without citing
+    # its title evidence and thereby losing a fact already in structured data.
+    if len(records_by_id) == 1:
+        record = next(iter(records_by_id.values()))
+        deadline_answer = _verified_application_deadline(question, record)
+        if deadline_answer is not None:
+            rendered, supporting_records = _render_supported_claims(
+                [{"text": deadline_answer, "notice_ids": [str(record["notice_id"])]}],
+                records_by_id,
+            )
+            st.append_turn(
+                question, rendered, records=supporting_records,
+                active_notice=record,
+            )
+            if st is state:
+                _sync_back()
+            if debug_phase2:
+                print("[UniAI] Verified application-deadline fast path:",
+                      record.get("notice_id"), flush=True)
+            return rendered
 
     # Missing exact values require caution: a null structured field is not
     # proof that the original PDF explicitly says 'not specified'. For a
@@ -928,7 +1008,7 @@ def _handle_casual_chat(question, current_state=None):
 
 def ask_uniai(question, state=None):
     """Ask a university notice question and return the final answer."""
-    global last_latest_question, last_notice_records, chat_history
+    global last_notice_records, chat_history
 
     if not question or not str(question).strip():
         return "Please enter a question."
@@ -946,15 +1026,37 @@ def ask_uniai(question, state=None):
             _sync_back()
         return content
 
-    if (is_notice_detail_follow_up(question)
-            and (st.get_active_notice() or st.get_last_notice_records())
-            and not explicitly_changes_notice_topic(
-                question, st.get_active_notice() or st.get_last_notice_records()[0])):
-        active = st.get_active_notice() or st.get_last_notice_records()[0]
-        return answer_from_records(question, [active], active_notice=active, current_state=st)
+    # A multi-notice list is ambiguous until the student chooses a notice.
+    # Never silently treat its first item as the active notice.
+    detail_candidates = st.get_last_notice_records()
+    detail_active = st.get_active_notice() or (
+        detail_candidates[0] if len(detail_candidates) == 1 else None
+    )
+    if (is_notice_detail_follow_up(question) and detail_active
+            and not explicitly_changes_notice_topic(question, detail_active)):
+        return answer_from_records(
+            question, [detail_active], active_notice=detail_active,
+            current_state=st,
+        )
 
     # Query Understanding Layer
     parsed = understand_query(question, st)
+
+    # A request like "explain this notice" is ambiguous immediately after a
+    # multi-notice list: there is no single active notice yet.
+    if (st.get_active_notice() is None
+            and len(st.get_last_notice_records()) > 1
+            and (is_notice_detail_follow_up(question)
+                 or parsed.intent == "notice_followup"
+                 or parsed.use_active_notice)
+            and not explicitly_changes_notice_topic(
+                question, st.get_last_notice_records()[0])):
+        content = (
+            "Which notice should I explain? Please choose a number from "
+            f"1 to {len(st.get_last_notice_records())}."
+        )
+        st.append_turn(question, content)
+        return content
 
     # Multi-document follow-ups must reuse EXACTLY the documents referenced
     # by the previous answer, not the Pinecone candidate pool.
@@ -980,25 +1082,29 @@ def ask_uniai(question, state=None):
         ordinal = parsed.ordinal or extract_notice_ordinal(question) or 1
         last_records = st.get_last_notice_records()
 
-        if last_records and len(last_records) >= ordinal:
-            selected_record = last_records[ordinal - 1]
-        else:
-            source_question = last_latest_question or "latest notices"
-            try:
-                records = retrieve_context(source_question, top_k=ordinal)
-            except Exception as error:
-                print(f"Retrieval failed: {error}")
-                return NO_RESULTS_MESSAGE
-
-            if len(records) < ordinal:
-                return (
-                    f"I found only {len(records)} latest notices, "
-                    f"so notice {ordinal} is not available."
-                )
-            selected_record = records[ordinal - 1]
+        # Ordinals belong ONLY to the list returned in this conversation.
+        # Do not fall back to a module-global latest query or a fresh search.
+        if not last_records:
+            content = (
+                "Please ask me to list the notices first, then choose one "
+                "by its number."
+            )
+            st.append_turn(question, content)
+            return content
+        if ordinal < 1 or ordinal > len(last_records):
+            content = (
+                f"This conversation has {len(last_records)} listed "
+                f"notice(s). Please choose a number from 1 to {len(last_records)}."
+            )
+            st.append_turn(question, content)
+            return content
+        selected_record = last_records[ordinal - 1]
 
         content = format_notice_line(selected_record)
-        st.append_turn(question, content, records=[selected_record], active_notice=selected_record)
+        st.append_turn(
+            question, content, records=[selected_record],
+            active_notice=selected_record, preserve_notice_list=True,
+        )
         if st is globals()["state"]:
             _sync_back()
         return content
@@ -1032,7 +1138,10 @@ def ask_uniai(question, state=None):
         print("Last notice count:", len(st.get_last_notice_records()))
 
     if (parsed.intent == "notice_followup" or parsed.use_active_notice) and not (conflicting_year or conflicting_topic):
-        active = st.get_active_notice() or (st.get_last_notice_records() or [None])[0]
+        recent_records = st.get_last_notice_records()
+        active = st.get_active_notice() or (
+            recent_records[0] if len(recent_records) == 1 else None
+        )
         if active:
             if os.getenv("UNIAI_DEBUG", "0").lower() in ("1", "true", "yes"):
                 print("Follow-up route: active notice")
@@ -1109,7 +1218,8 @@ def ask_uniai(question, state=None):
         return NO_RESULTS_MESSAGE
 
     if is_latest_query:
-        last_latest_question = question
+        # Session-specific metadata; never mutate module-global chat context.
+        st.session_memory["last_latest_question"] = question
         if requested_top_k == 1 or len(records) == 1:
             content = format_notice_line(records[0])
             st.append_turn(question, content, records=records, active_notice=records[0])

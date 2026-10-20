@@ -11,8 +11,11 @@ class ConversationState:
     - session_memory: Session-only memory for user preferences and corrections (e.g. student's name)
     """
 
-    def __init__(self, history_window=5):
-        self.history_window = history_window
+    def __init__(self, history_window=5, max_turns_stored=25):
+        # Bound the retained conversation. This state is process-local and
+        # should not grow indefinitely for an active browser session.
+        self.history_window = max(1, int(history_window))
+        self.max_turns_stored = max(self.history_window, int(max_turns_stored))
         self.chat_history = []
         self.last_notice_records = []
         self.last_answer_records = []
@@ -21,47 +24,61 @@ class ConversationState:
         self.session_memory = {}
 
     def extract_and_remember_user_name(self, text):
-        """Extract user name declarations or corrections within the session."""
-        text_clean = str(text or "").strip()
+        """Remember only *explicit* self-identification and name corrections.
 
-        # 1. "my name is X" or "call me X" or "i am X" anywhere in the text (takes high precedence)
-        m1 = re.search(r"\b(?:my\s+name\s+is|i\s+am|call\s+me)\s+([A-Za-z]+)\b", text_clean, re.IGNORECASE)
-        if m1:
-            cand = m1.group(1).strip().capitalize()
-            if cand.lower() not in {"a", "the", "student", "uniai", "here", "just", "looking", "trying"}:
-                self.session_memory["user_name"] = cand
-                return cand
+        Never infer a name from generic statements such as "it's closed",
+        "I am looking for notices", or a notice's contents.
+        """
+        message = str(text or "").strip()
+        if not message:
+            return self.session_memory.get("user_name")
 
-        # 2. "correct (my name/it) to X"
-        m2 = re.search(r"\bcorrect\s+(?:my\s+name\s+to|it\s+to)\s+([A-Za-z]+)\b", text_clean, re.IGNORECASE)
-        if m2:
-            cand = m2.group(1).strip().capitalize()
-            self.session_memory["user_name"] = cand
-            return cand
+        # Allow a name and optional family name, but do not extract entire
+        # sentences. A name is stored only on a clear identity declaration.
+        pattern = (
+            r"\b(?:my\s+name\s+is|call\s+me|"
+            r"correct\s+my\s+name\s+to|change\s+my\s+name\s+to)"
+            r"\s+([A-Za-z]+(?:[ -](?!and\b|but\b|because\b|please\b|who\b|from\b|is\b)[A-Za-z]+)?)\b"
+        )
+        match = re.search(pattern, message, re.IGNORECASE)
+        if not match:
+            # Accept a short standalone "I'm Farhan" / "I am Farhan",
+            # not "I am looking for the exam notices".
+            match = re.fullmatch(
+                r"(?:i\s+am|i['’]m)\s+([A-Za-z]+(?:[ -][A-Za-z]+)?)"
+                r"[.!]?", message, re.IGNORECASE
+            )
+        if not match and self.session_memory.get("user_name"):
+            # A concise correction is meaningful only after the session has
+            # already established that it is discussing the student's name.
+            match = re.fullmatch(
+                r"(?:correct\s+it|correction)\s*[:,]\s*([A-Za-z]+(?:[ -][A-Za-z]+)?)\.?",
+                message, re.IGNORECASE,
+            )
+        if not match:
+            return self.session_memory.get("user_name")
 
-        # 3. "correct it: X", "correction: X", "correct it, X"
-        m3 = re.search(r"\b(?:correct\s+it|correction)[\s,:]+(?:to\s+|is\s+)?([A-Za-z]+)\b", text_clean, re.IGNORECASE)
-        if m3:
-            cand = m3.group(1).strip().capitalize()
-            if cand.lower() not in {"my", "a", "the", "name", "it", "to", "is", "uniai"}:
-                self.session_memory["user_name"] = cand
-                return cand
+        raw_name = match.group(1).strip()
+        non_names = {
+            "a", "the", "student", "uniai", "here", "just", "looking",
+            "trying", "fine", "okay", "ok", "interested", "studying",
+            "going", "not", "ready", "asking", "confused", "happy",
+            "sorry", "learning", "checking", "from", "searching",
+            "when", "after", "later", "back", "if", "once", "about",
+        }
+        words = raw_name.lower().split()
+        if any(w in non_names for w in words):
+            return self.session_memory.get("user_name")
 
-        # 4. "it is X" or "it's X"
-        m4 = re.search(r"\bit(?:'s|s)\s+([A-Za-z]+)\b", text_clean, re.IGNORECASE)
-        if m4:
-            cand = m4.group(1).strip().capitalize()
-            if cand.lower() not in {"a", "the", "fine", "ok", "okay", "uniai"}:
-                self.session_memory["user_name"] = cand
-                return cand
-
-        return self.session_memory.get("user_name")
+        name = " ".join(word.capitalize() for word in raw_name.split())
+        self.session_memory["user_name"] = name
+        return name
 
     def get_user_name(self):
         """Retrieve the remembered student name in this session, if any."""
         return self.session_memory.get("user_name")
 
-    def append_turn(self, query, response, records=None, active_notice=None):
+    def append_turn(self, query, response, records=None, active_notice=None, preserve_notice_list=False):
         """Record a completed turn and update state accordingly."""
         records_list = list(records) if records else []
         self.chat_history.append({
@@ -69,11 +86,19 @@ class ConversationState:
             "response": response,
             "records": records_list,
         })
+        # Preserve the identity of the list for existing main.py references.
+        if len(self.chat_history) > self.max_turns_stored:
+            del self.chat_history[:-self.max_turns_stored]
 
-        self.set_last_answer_records(records_list)
+        # If records=None this was a conversational turn (e.g. "thanks").
+        # It should not erase the last cited notices needed by "both of them".
+        # Explicit records=[] still means "no evidence in this answer".
+        if records is not None:
+            self.set_last_answer_records(records_list)
 
-        # Update last_notice_records if new records were provided
-        if records_list:
+        # Selecting item #2 from a numbered list must not destroy the list;
+        # "show the 3rd one" should still reference the same original results.
+        if records_list and not preserve_notice_list:
             self.set_last_results(records_list)
 
         # Update active_notice centrally
@@ -148,7 +173,9 @@ class ConversationState:
         if not self.chat_history:
             return "No recent conversation history."
 
-        selected_turns = self.chat_history[-limit:]
+        if limit is not None and int(limit) <= 0:
+            return "No recent conversation history."
+        selected_turns = self.chat_history[-int(limit):]
         formatted = []
         for turn in selected_turns:
             if isinstance(turn, dict):
@@ -158,7 +185,9 @@ class ConversationState:
                 q, a = turn[0], turn[1]
             else:
                 q, a = str(turn), ""
-            formatted.append(f"User: {q}\nAssistant: {a}")
+            # Keep prompt sizes predictable and prevent long, repeated source
+            # lists from dominating the LLM context window.
+            formatted.append(f"User: {str(q)[:600]}\nAssistant: {str(a)[:1600]}")
         return "\n\n".join(formatted)
 
     def format_context_for_understanding(self, max_turns=3):

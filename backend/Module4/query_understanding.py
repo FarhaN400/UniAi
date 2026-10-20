@@ -190,6 +190,15 @@ def _extract_requested_field(text):
 def _extract_ordinal_from_text(text):
     text_clean = re.sub(r"[?.!,]+$", "", text.lower()).strip()
 
+    # "first-round", "second round", "3rd semester" and "fourth year"
+    # describe academic items, not positions in a previous notice list.
+    if re.search(
+        r"\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+        r"\d+(?:st|nd|rd|th))[-\s]+(?:round|semester|year|phase)\b",
+        text_clean,
+    ):
+        return None
+
     # Do not match ordinal if text mentions an official entrance exam
     for topic_kw in ["wbjee", "wbjeeb", "jeca", "jelet", "jemat", "pget", "cet"]:
         if re.search(rf"\b{topic_kw}\b", text_clean):
@@ -294,8 +303,9 @@ def _is_conversational_casual(text):
         r"\bcorrect\s+(?:my\s+name|it)\b",
         r"\bcorrection[\s,.:;]",
         r"\bcan\s+you\s+correct\s+what\s+i\s+(?:said|told)\b",
-        r"\b(?:actually|no|wait)[,\s]+(?:my\s+name\s+is|it(?:'s|s)|call\s+me|i\s+am)\b",
-        r"\b(?:my\s+name\s+is|i\s+am|call\s+me)\s+[a-zA-Z]+\b",
+        r"\b(?:actually|no|wait)[,\s]+(?:my\s+name\s+is|call\s+me)\s+[a-zA-Z]+\b",
+        r"\b(?:my\s+name\s+is|call\s+me)\s+[a-zA-Z]+\b",
+        r"^(?:i\s+am|i['’]m)\s+[a-zA-Z]+(?:[ -][a-zA-Z]+)?[.!]?$",
     ]
     for p in correction_signals:
         if re.search(p, text_lower):
@@ -362,6 +372,8 @@ TOPIC_MARKERS = {
     "exam": r"\b(?:examination|exam|semester)\b",
     "placement": r"\b(?:placement|recruitment)\b",
     "ragging": r"\bragging\b",
+    "vacant_seats": r"\bvacant\s+(?:b\.?\s*tech\s+)?seats?\b",
+    "affiliation": r"\b(?:affiliation|non[\s-]?aicte)\b",
 }
 
 
@@ -384,11 +396,63 @@ def explicitly_changes_notice_topic(question, active_notice):
     if explicit_years and notice_years and not explicit_years.issubset(notice_years):
         return True
 
+    # Changing admission rounds should not silently reuse the previous
+    # round's document (even when both concern the same WBJEEB year).
+    def rounds(text):
+        result = set()
+        for number, aliases in {
+            1: r"(?:1st|first)", 2: r"(?:2nd|second)",
+            3: r"(?:3rd|third)", 4: r"(?:4th|fourth)",
+        }.items():
+            if re.search(rf"\b{aliases}[-\s]+round\b", text):
+                result.add(number)
+        return result
+
+    asked_rounds, active_rounds = rounds(q), rounds(active_text)
+    if asked_rounds and active_rounds and asked_rounds.isdisjoint(active_rounds):
+        return True
+
     q_topics = {name for name, pattern in TOPIC_MARKERS.items()
                 if re.search(pattern, q)}
     active_topics = {name for name, pattern in TOPIC_MARKERS.items()
                      if re.search(pattern, active_text)}
     return any(name not in active_topics for name in q_topics)
+
+
+def _explicit_temporal_notice_request(text):
+    """Handle explicit global latest/today/yesterday requests before follow-ups.
+
+    Topic-qualified queries such as "latest hostel notice" must still route
+    through topic search rather than return all university notices.
+    """
+    lower = str(text or "").lower()
+    if _detect_explicit_topic_or_entity(lower):
+        return None
+    if not re.search(r"\b(?:notices?|notifications?|circulars?)\b", lower):
+        return None
+    if re.search(r"\b(?:today'?s|published\s+today|came\s+today)\b", lower):
+        return "today_notices"
+    if re.search(r"\b(?:yesterday'?s|published\s+yesterday|came\s+yesterday)\b", lower):
+        return "yesterday_notices"
+    if re.search(r"\b(?:latest|recent|most\s+recent)\b", lower):
+        return "latest_notices"
+    return None
+
+
+def _temporal_result(text, intent):
+    scope = {"today_notices": "today", "yesterday_notices": "yesterday",
+             "latest_notices": "latest"}[intent]
+    return QueryUnderstandingResult(
+        intent=intent,
+        standalone_query={
+            "today_notices": "university notices published today",
+            "yesterday_notices": "university notices published yesterday",
+            "latest_notices": "latest university notices",
+        }[intent],
+        needs_retrieval=True, use_active_notice=False,
+        temporal_scope=scope,
+        count=_extract_count_from_text(str(text or "")),
+    )
 
 
 def fallback_understand_query(message: str, state=None) -> QueryUnderstandingResult:
@@ -418,7 +482,14 @@ def fallback_understand_query(message: str, state=None) -> QueryUnderstandingRes
         )
 
     # --------------------------------------------------
-    # Priority 1: Explicit Ordinal Reference
+    # Priority 1: Explicit global latest/today/yesterday request
+    # --------------------------------------------------
+    temporal_intent = _explicit_temporal_notice_request(text)
+    if temporal_intent:
+        return _temporal_result(text, temporal_intent)
+
+    # --------------------------------------------------
+    # Priority 2: Explicit Ordinal Reference
     # --------------------------------------------------
     ordinal = _extract_ordinal_from_text(text)
     if ordinal is not None:
@@ -452,10 +523,13 @@ def fallback_understand_query(message: str, state=None) -> QueryUnderstandingRes
 
     # Check if current query represents an EXPLICIT NEW TOPIC overriding active notice:
     # Example: active notice is "Hostel Closure", user says "What documents are required for WBJEE 2026?"
-    is_explicit_override = False
+    is_explicit_override = explicitly_changes_notice_topic(text, active_doc)
     if has_active_notice and explicit_topic:
-        # If the explicit topic in the query is NOT mentioned in the active notice title:
-        if explicit_topic not in active_title:
+        active_searchable = " ".join(str(x) for x in (
+            active_title, active_sd.get("summary", ""),
+            active_sd.get("key_points", ""), active_sd.get("action_required", "")
+        )).lower()
+        if explicit_topic not in active_searchable:
             is_explicit_override = True
 
     # --------------------------------------------------
@@ -620,6 +694,11 @@ def understand_query(message: str, state=None) -> QueryUnderstandingResult:
             use_active_notice=False,
         )
 
+    # Explicit global time queries must never inherit an old active notice.
+    temporal_intent = _explicit_temporal_notice_request(message)
+    if temporal_intent:
+        return _temporal_result(message, temporal_intent)
+
     # Fast deterministic check for clear ordinal requests:
     ordinal = _extract_ordinal_from_text(message)
     if ordinal is not None:
@@ -649,6 +728,13 @@ def understand_query(message: str, state=None) -> QueryUnderstandingResult:
                 if re.search(r"\b20\d{2}\b", message) else None,
             )
         return fresh
+
+    # Deterministic handling of unambiguous active-notice follow-ups avoids
+    # unnecessary LLM requests and prevents the model from changing the topic.
+    if active is not None and not explicitly_changes_notice_topic(message, active):
+        deterministic = fallback_understand_query(message, state)
+        if deterministic.intent == "notice_followup":
+            return deterministic
 
     model = get_understanding_model()
     if model is None:
@@ -680,8 +766,17 @@ def understand_query(message: str, state=None) -> QueryUnderstandingResult:
             json_str = content[start_idx:end_idx + 1]
             data = json.loads(json_str)
 
-            # Validate with Pydantic
+            # Validate with Pydantic, then enforce context invariants. The
+            # LLM must not fabricate an active notice or override explicit
+            # topic/year switches selected by deterministic safeguards.
             validated = QueryUnderstandingResult.model_validate(data)
+            if validated.use_active_notice or validated.intent == "notice_followup":
+                if active is None or explicitly_changes_notice_topic(message, active):
+                    return fallback_understand_query(message, state)
+            explicit_year = re.search(r"\b(20\d{2})\b", message)
+            if explicit_year and validated.year is not None:
+                if validated.year != int(explicit_year.group(1)):
+                    return fallback_understand_query(message, state)
             return validated
 
     except Exception:
