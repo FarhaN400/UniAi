@@ -1,0 +1,60 @@
+name: UniAI - MAKAUT Trusted Intermediate Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Install Python dependencies
+        run: python3 -m pip install --quiet --user requests certifi
+
+      - name: Test MAKAUT HTTPS using verified GlobalSign intermediate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tempdir="$(mktemp -d)"
+          trap 'rm -rf "$tempdir"' EXIT
+
+          curl --fail --show-error --silent --max-time 25 \
+            https://secure.globalsign.com/cacert/gsgccr6alphasslca2025.crt \
+            -o "$tempdir/intermediate.crt"
+
+          openssl x509 -inform DER -in "$tempdir/intermediate.crt" \
+            -out "$tempdir/intermediate.pem"
+
+          actual="$(openssl x509 -in "$tempdir/intermediate.pem" -fingerprint -sha1 -noout \
+            | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          expected="431955E6E5DABE857F1336C02368E5495F143EED"
+          if [ "$actual" != "$expected" ]; then
+            echo "FAIL: GlobalSign intermediate fingerprint mismatch"
+            exit 1
+          fi
+          echo "PASS: Correct GlobalSign AlphaSSL 2025 intermediate fingerprint"
+
+          python3 - "$tempdir/intermediate.pem" "$tempdir/combined-ca.pem" <<'PY'
+          import certifi
+          import pathlib
+          import sys
+          intermediate = pathlib.Path(sys.argv[1]).read_bytes()
+          roots = pathlib.Path(certifi.where()).read_bytes()
+          pathlib.Path(sys.argv[2]).write_bytes(roots + b"\n" + intermediate)
+          PY
+
+          python3 - "$tempdir/combined-ca.pem" <<'PY'
+          import requests
+          import sys
+          url = "https://makautwb.ac.in/page.php?id=340"
+          response = requests.get(url, timeout=25, verify=sys.argv[1])
+          response.raise_for_status()
+          assert "html" in response.headers.get("Content-Type", "").lower()
+          print("PASS: MAKAUT HTTPS verified with complete trusted chain")
+          print("HTTP status:", response.status_code)
+          print("HTML bytes:", len(response.content))
+          print("No SSL verification bypass used.")
+          PY
