@@ -46,11 +46,7 @@ from Module4.evidence import (
 )
 
 
-MODEL_NAME = os.getenv(
-    "GROQ_MODEL",
-    "llama-3.3-70b-versatile"
-)
-
+MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 NO_RESULTS_MESSAGE = (
     "I could not find this information in the available university notices."
 )
@@ -348,17 +344,14 @@ def format_notice_list(records):
 
 
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq" if os.getenv("GROQ_API_KEY") else "ollama").strip().lower()
-
-if LLM_PROVIDER == "groq" and os.getenv("GROQ_API_KEY"):
-    from langchain_groq import ChatGroq
-    MODEL_NAME = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-    model = ChatGroq(
-        model=MODEL_NAME,
-        temperature=0,
-        max_tokens=1024,
-        max_retries=2,
-    )
+# Production inference runs on Groq, not on a local Ollama server.
+# Set GROQ_API_KEY in Render's Environment panel (never commit it).
+model = ChatGroq(
+    model=MODEL_NAME,
+    temperature=0,
+    max_tokens=2048,
+    max_retries=2,
+)
 
 rag_chain = rag_prompt | model
 
@@ -991,7 +984,7 @@ def _handle_casual_chat(question, current_state=None):
     # Assistant persona: "who are you", "what can you do"
     if any(re.search(p, text_lower) for p in [r"\bwho\s+are\s+you\b", r"\bwhat\s+can\s+you\s+do\b", r"\bhow\s+can\s+you\s+help\b"]):
         return (
-            "I am UniAI, the official University AI Assistant for MAKAUT. "
+            "I am UniAI, an independent academic assistant for MAKAUT notices. "
             "I can help you find and understand university notices, entrance exam schedules "
             "(such as WBJEE and JELET), fees, deadlines, and required documents."
         )

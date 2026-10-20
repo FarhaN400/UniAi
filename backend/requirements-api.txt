@@ -1,0 +1,10 @@
+# FastAPI RAG service only. GitHub Actions ingestion uses requirements-phase5.txt.
+# Versions aligned to the repo's existing LangChain 0.3 stack.
+fastapi==0.128.8
+uvicorn==0.39.0
+pydantic==2.13.5
+pymongo==4.18.0
+pinecone==7.3.0
+python-dotenv==1.2.1
+langchain-core==0.3.86
+langchain-groq==0.2.4

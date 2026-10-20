@@ -1,22 +1,31 @@
-# Environment variables / secrets
+# Secrets and local environment
 .env
-.env.local
+.env.*
 *.env
+!.env.example
+!**/.env.example
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 venv/
 .venv/
 project/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 
-# macOS
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# Editor/system/cache
 .DS_Store
-
-# IDE
 .vscode/
 .idea/
+*.log
 
-# Downloaded/generated PDFs (optional — depends if you want to commit test PDFs)
+# Downloaded working documents (keep source docs out of repo)
 *.pdf

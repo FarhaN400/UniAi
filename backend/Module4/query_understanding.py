@@ -4,7 +4,7 @@ import json
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
 
@@ -130,12 +130,11 @@ def get_understanding_model():
     global _understanding_chat
     if _understanding_chat is None:
         try:
-            _understanding_chat = ChatOllama(
-                model="qwen3:4b-instruct",
+            _understanding_chat = ChatGroq(
+                model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
                 temperature=0,
-                num_ctx=8192,
-                num_predict=256,
-                keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
+                max_tokens=512,
+                max_retries=2,
             )
         except Exception as e:
             print(f"[QueryUnderstanding] LLM initialization warning: {e}")

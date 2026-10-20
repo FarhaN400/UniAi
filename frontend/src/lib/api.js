@@ -1,31 +1,28 @@
 import { normalizeUrl } from '../components/FormattedMessage';
 
-const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+// Public frontend setting only. Never expose MongoDB/Pinecone/Groq credentials here.
+const BASE = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 export const demoMode = !BASE;
 
-const sampleSources = [
-  {
-    title: 'MAKAUT Official Notice Board',
-    url: 'https://makautwb.ac.in/page.php?id=340',
-    date: 'Current Session'
-  }
-];
+const sampleSources = [{
+  title: 'MAKAUT Official Notice Board',
+  url: 'https://makautwb.ac.in/page.php?id=340',
+  date: 'Current Session'
+}];
 
 export async function askUniAI(question, conversationId) {
   if (!BASE) {
-    await new Promise(r => setTimeout(r, 900));
     return {
-      answer: `This is the UniAI frontend demo. You asked: “${question}”\n\nTo get answers from official MAKAUT notices, connect your FastAPI backend in the .env file (e.g. VITE_API_BASE_URL=http://localhost:8000). Once connected, UniAI will retrieve notices and show verified citations and clickable links here. Visit official notice board: https://makautwb.ac.in/page.php?id=340`,
+      answer: `UniAI is running in frontend demo mode. You asked: “${question}”\n\nTo use official MAKAUT notices, configure VITE_API_BASE_URL to the deployed FastAPI backend URL. University notice board: https://makautwb.ac.in/page.php?id=340`,
       sources: sampleSources,
+      conversation_id: conversationId,
       demo: true
     };
   }
 
-  // 180s timeout: Local LLMs (4B parameters) can take 45-90 seconds on consumer hardware
   const controller = new AbortController();
-  const timeoutMs = 180000;
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
+  // Allow a cold start + cloud LLM inference on the free hosting tier.
+  const timeout = setTimeout(() => controller.abort(), 120000);
   try {
     const response = await fetch(`${BASE}/api/chat`, {
       method: 'POST',
@@ -33,47 +30,35 @@ export async function askUniAI(question, conversationId) {
       body: JSON.stringify({ question, conversation_id: conversationId }),
       signal: controller.signal
     });
-
     if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`Server returned ${response.status}${errText ? `: ${errText}` : ''}`);
+      const detail = await response.json().catch(() => null);
+      throw new Error(detail?.detail || `Server returned HTTP ${response.status}`);
     }
-
     const result = await response.json();
     if (typeof result.answer !== 'string') {
       throw new Error('Invalid API response: answer missing');
     }
-
-    // Sanitize and normalize sources
     const validSources = Array.isArray(result.sources)
-      ? result.sources
-          .map(s => {
-            if (!s || typeof s !== 'object') return null;
-            const rawUrl = typeof s.url === 'string' ? s.url.trim() : '';
-            if (!rawUrl) return null;
-            const safeUrl = normalizeUrl(rawUrl);
-            if (!/^https?:\/\//i.test(safeUrl)) return null;
-            return {
-              title: s.title || 'Official University Notice',
-              url: safeUrl,
-              date: s.date || null
-            };
-          })
-          .filter(Boolean)
+      ? result.sources.map(s => {
+          if (!s || typeof s !== 'object') return null;
+          const url = typeof s.url === 'string' ? normalizeUrl(s.url.trim()) : '';
+          if (!/^https?:\/\//i.test(url)) return null;
+          return { title: s.title || 'Official University Notice', url, date: s.date || null };
+        }).filter(Boolean)
       : [];
-
     return {
       answer: result.answer,
       sources: validSources,
+      conversation_id: result.conversation_id || conversationId,
       demo: false
     };
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      const timeoutErr = new Error('Request timed out. The local AI model took longer than 3 minutes to respond. Please ensure Ollama is running and responsive, then try again.');
-      timeoutErr.name = 'TimeoutError';
-      throw timeoutErr;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      const timeoutError = new Error('The cloud backend took too long to respond. It may be starting up. Please retry.');
+      timeoutError.name = 'TimeoutError';
+      throw timeoutError;
     }
-    throw err;
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
