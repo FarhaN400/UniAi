@@ -1,8 +1,5 @@
 name: UniAI - Automatic MAKAUT Notice Sync
 
-
-name: UniAI - Automatic MAKAUT Notice Sync
-
 on:
   workflow_dispatch:
   schedule:
