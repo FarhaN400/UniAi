@@ -533,9 +533,11 @@ def retrieve_semantic(question, top_k=5):
 
 
 def retrieve_context(question, top_k=3):
-    """Route generic latest/today/yesterday requests to chronological MongoDB."""
+    """Route pure time requests chronologically and named topics by exact scope."""
     if is_pure_time_query(question):
         return retrieve_time_based(question, top_k)
+    if detect_search_topics(question) or _requested_issue_date_any_position(question):
+        return retrieve_filtered_notices(question, top_k)
     return retrieve_semantic(question, top_k)
 
 
@@ -585,3 +587,350 @@ def build_context_string(records, question=None):
         block.append(f"Official Source URL: {url}")
         context_blocks.append("\n".join(block))
     return "\n\n" + ("=" * 45) + "\n\n".join(context_blocks) + "\n" + ("=" * 45)
+
+# ---------------------------------------------------------------------------
+# Phase 6 reliability: explicit-scope MongoDB retrieval for named notice topics
+# ---------------------------------------------------------------------------
+# A campus notice collection is small enough to search the primary metadata.
+# Avoid asking a vector model to decide whether a WBJEE/JECA/year constraint
+# applies. Integrated Pinecone search remains available through retrieve_semantic.
+
+SEARCH_TOPICS = {
+    "wbjee": ("wbjee", "wbjeeb"),
+    "jeca": ("jeca",),
+    "jelet": ("jelet",),
+    "jemat": ("jemat", "wbjemat"),
+    "pget": ("pget",),
+    "cet": ("cet",),
+    "hostel": ("hostel", "hostels"),
+    "holiday": ("holiday", "holidays", "puja", "vacation"),
+    "registration": ("registration", "register", "enrolment", "enrollment"),
+    "frams": ("frams", "u-frams", "u‑frams", "face registration"),
+    "scholarship": ("scholarship", "scholarships", "fellowship"),
+    "exam": ("exam", "examination", "examinations", "semester", "routine"),
+    "placement": ("placement", "placements", "recruitment", "training and placement"),
+    "ragging": ("ragging", "discipline", "disciplinary"),
+    "vacant": ("vacant", "vacancy", "vacancies", "decentralised", "decentralized"),
+    "affiliation": ("affiliation", "affiliated", "non-aicte"),
+}
+
+
+def _phrase_regex(words):
+    return re.compile("|".join(
+        rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])" for word in words
+    ), re.I)
+
+
+def detect_search_topics(question):
+    """Return explicitly named subject categories, not guessed intent."""
+    lower = str(question or "").casefold()
+    found = set()
+    for topic, aliases in SEARCH_TOPICS.items():
+        if _phrase_regex(aliases).search(lower):
+            found.add(topic)
+    # 'face registration' is more specific than generic registration.
+    if "frams" in found:
+        found.discard("registration")
+    # Hostel closure during Durga Puja: holiday is context, hostel is subject.
+    if "hostel" in found:
+        found.discard("holiday")
+    # WBJEE portal registration means WBJEE is the primary topic.
+    if found & {"wbjee", "jeca", "jelet", "jemat", "pget", "cet"}:
+        found.discard("registration")
+    return found
+
+
+def _primary_search_text(record):
+    sd = record.get("structured_data") or {}
+    return " ".join(str(x or "") for x in (
+        record.get("title"), sd.get("title"), sd.get("target_audience"),
+        sd.get("notice_type"),
+    )).casefold()
+
+
+def _secondary_search_text(record):
+    sd = record.get("structured_data") or {}
+    return " ".join(str(x or "") for x in (
+        sd.get("summary"), sd.get("action_required"), sd.get("key_points"),
+    )).casefold()
+
+
+def _exam_topics_in_text(text):
+    """Exams explicitly named in one identity field, not incidental OCR text."""
+    return {
+        exam for exam in ADMISSION_TOPICS
+        if _phrase_regex(SEARCH_TOPICS[exam]).search(str(text or "").casefold())
+    }
+
+
+def _search_topic_matches(record, topics):
+    if not topics:
+        return True
+    sd = record.get("structured_data") or {}
+    primary = _primary_search_text(record)
+    secondary = _secondary_search_text(record)
+
+    # The student-visible title is authoritative for subject identity. In
+    # real Mongo records the website title, generated structured title and
+    # target_audience sometimes DISAGREE: for example, a JELET title can have
+    # a WBJEEB board reference in target_audience. Combining all three into
+    # one bag of words used to let that JELET notice match a WBJEE search.
+    requested_exams = set(ADMISSION_TOPICS) & set(topics)
+    if requested_exams:
+        extracted_title = sd.get("title") or ""
+        scraped_title = record.get("title") or ""
+        # A conflicting exam in EITHER title vetoes the document. Do not
+        # allow a mention of WBJEE in its audience/summary to override JELET.
+        # Joint-exam titles (JECA and JELET) remain eligible for either query.
+        for title in (extracted_title, scraped_title):
+            title_exams = _exam_topics_in_text(title)
+            if title_exams and not (title_exams & requested_exams):
+                return False
+
+        identity_exams = (
+            _exam_topics_in_text(extracted_title)
+            | _exam_topics_in_text(scraped_title)
+        )
+        if identity_exams:
+            return bool(identity_exams & requested_exams)
+
+        # No exam named in either title. Audience can establish identity,
+        # but not if it identifies a different exam; else use summary.
+        audience_exams = _exam_topics_in_text(sd.get("target_audience"))
+        if audience_exams:
+            return bool(audience_exams & requested_exams)
+        return any(
+            _phrase_regex(SEARCH_TOPICS[exam]).search(secondary)
+            for exam in requested_exams
+        )
+
+    # Non-exam topic matching keeps the existing broader semantics.
+    return any(_phrase_regex(SEARCH_TOPICS[topic]).search(primary)
+               for topic in topics) or any(
+        _phrase_regex(SEARCH_TOPICS[topic]).search(secondary)
+        for topic in topics
+    )
+
+
+def _question_scope_matches(question, record):
+    """Require subject-specific relevance beyond a generic category word.
+
+    This deliberately narrows searches for registration of students, holiday
+    notices, placement/recruitment notices and verification-specific WBJEE
+    queries. It never invents a document when none fits the requested scope.
+    """
+    q = str(question or "").casefold()
+    sd = record.get("structured_data") or {}
+    primary = " ".join(str(x or "") for x in (
+        record.get("title"), sd.get("title"),
+    )).casefold()
+    secondary = " ".join(str(x or "") for x in (
+        sd.get("summary"), sd.get("action_required"),
+    )).casefold()
+    text = primary + " " + secondary
+    # A request for student-registration notices is NOT a search for any
+    # document that happens to say "registering students" in its summary.
+    # First require that student registration is the actual notice subject.
+    if re.search(r"\bregistration\s+of\s+students?\b|\bstudents?\s+registration\b", q):
+        excluded_subject = (
+            r"\b(?:conference|affiliat(?:ion|ing)|new\s+colleges?|"
+            r"supernumerary|vacant\s+seats?|seat\s+(?:intake|allotment)|"
+            r"recruitment|scholarship|fellowship)\b"
+        )
+        if re.search(excluded_subject, primary):
+            return False
+        if not re.search(r"\b(?:registration|registrations|enrolment|enrollment|"
+                         r"registering|registration\s+portal)\b", primary):
+            return False
+        if not re.search(r"\b(?:students?|admitted|allotted|admissions?|"
+                         r"registration\s+portal)\b", text):
+            return False
+
+        # For an explicitly requested *academic session*, require that very
+        # session. Merely containing 2026 in "2025-2026" is not a match for
+        # 2026-27; likewise the 2026 issue date does not imply AY 2026-27.
+        academic_request = re.search(
+            r"\b(?:academic\s+(?:year|session)|ay)\s*"
+            r"(20\d{2})\s*[-–—/]\s*(20\d{2}|\d{2})\b", q,
+        )
+        if academic_request:
+            start = int(academic_request.group(1))
+            end_text = academic_request.group(2)
+            end = int(end_text) if len(end_text) == 4 else (start // 100) * 100 + int(end_text)
+            requested_session = (start, end)
+
+            def sessions(value):
+                pairs = set()
+                for a, b in re.findall(r"\b(20\d{2})\s*[-–—/]\s*(20\d{2}|\d{2})\b", value):
+                    begin = int(a)
+                    finish = int(b) if len(b) == 4 else (begin // 100) * 100 + int(b)
+                    pairs.add((begin, finish))
+                return pairs
+
+            title_sessions = sessions(primary)
+            # The title's session identifies the circular. A different year
+            # mentioned in its historical context cannot override the title.
+            if title_sessions:
+                if requested_session not in title_sessions:
+                    return False
+            elif requested_session not in sessions(secondary):
+                return False
+    if re.search(r"\bholidays?\b", q):
+        if not re.search(r"\b(?:holidays?|puja|vacation|hostel\s+clos(?:ure|ed)|campus\s+clos(?:ure|ed))\b", primary):
+            return False
+    if re.search(r"\b(?:placements?|recruitment)\b", q):
+        if not re.search(r"\b(?:placements?|recruitment|campus\s+drives?|career\s+fair|training\s+and\s+placement|tpo)\b", primary):
+            return False
+    if re.search(r"\b(?:document\s+verification|verification\s+and\s+admission)\b", q):
+        if not re.search(r"\b(?:verification|allottees?|counselling|counseling|admission\s+reporting)\b", primary):
+            return False
+
+    # When an entrance-exam query specifically asks for admission or
+    # counselling, exclude *registration-only* circulars that happen to
+    # mention that exam. An admission/reporting schedule still qualifies.
+    exam_requested = bool(set(detect_search_topics(question)) & set(ADMISSION_TOPICS))
+    if exam_requested and re.search(r"\b(?:admission|counselling|counseling)\b", q):
+        if re.search(r"\bregistration\b", primary) and not re.search(
+                r"\b(?:admission|counselling|counseling|reporting)\b", primary):
+            return False
+
+    # Requests explicitly for exam *schedules* should not be satisfied by fee
+    # waivers or administrative documents merely using the word examination.
+    if (re.search(r"\b(?:exam|examination|semester)\b", q)
+            and re.search(r"\bschedules?\b", q)):
+        if not re.search(r"\b(?:schedules?|routines?|timetables?|dates?|programmes?|programs?)\b", primary):
+            return False
+
+    # Recruitment searches should not substitute staff appointment orders for
+    # placement opportunities unless the user explicitly asks about officers.
+    if (re.search(r"\b(?:placements?|recruitment)\b", q)
+            and not re.search(r"\b(?:officer|appointment|staff|tpo)\b", q)):
+        if re.search(r"\bappointment\s+of\b.*\b(?:placement|training)\b.*\bofficer\b", primary):
+            return False
+    return True
+
+
+def _year_scope_matches(record, year):
+    """Use the student-visible notice title as the primary year identity.
+
+    Inconsistent scraped/extracted titles must not enable a JELET-2025 notice
+    to satisfy a WBJEE-2026 search solely because its upload/issue date is in
+    2026 or another title field mentions 2026.
+    """
+    if year is None:
+        return True
+    sd = record.get("structured_data") or {}
+    for title in (sd.get("title"), record.get("title")):
+        title_years = set(int(y) for y in re.findall(r"\b20\d{2}\b", str(title or "")))
+        if title_years:
+            return year in title_years
+    summary = " ".join(str(x or "") for x in (
+        sd.get("summary"), sd.get("target_audience"), sd.get("key_points")
+    ))
+    summary_years = set(int(y) for y in re.findall(r"\b20\d{2}\b", summary))
+    if summary_years:
+        return year in summary_years
+    return parse_issue_date(record).year == year
+
+
+def _requested_issue_date_any_position(question):
+    """Only interpret a calendar date as issue date when explicitly requested."""
+    lower = str(question or "").lower()
+    if not re.search(r"\b(?:issued|published|dated)\s+on\b|\bnotices?\s+(?:of|from)\s+\d", lower):
+        return None
+    match = re.search(r"\b(\d{1,2})\s+(" +
+        "|".join(MONTH_NUMBERS) + r")\s+(20\d{2})\b", lower)
+    if match:
+        day, month, year = match.groups()
+        try:
+            return date(int(year), MONTH_NUMBERS[month], int(day))
+        except ValueError:
+            return None
+    for pattern, fmt in ((r"\b\d{1,2}-\d{1,2}-20\d{2}\b", "%d-%m-%Y"),
+                         (r"\b\d{1,2}/\d{1,2}/20\d{2}\b", "%d/%m/%Y"),
+                         (r"\b20\d{2}-\d{1,2}-\d{1,2}\b", "%Y-%m-%d")):
+        m = re.search(pattern, lower)
+        if m:
+            try:
+                return datetime.strptime(m.group(0), fmt).date()
+            except ValueError:
+                return None
+    return None
+
+
+def _notice_search_score(question, record):
+    text = str(question or "").casefold()
+    # Terms that describe query intent add no distinctive value.
+    ignore = {"find", "show", "give", "tell", "about", "notices", "notice",
+              "the", "of", "for", "in", "from", "which", "are", "there",
+              "and", "or", "students", "student", "any", "university",
+              "makaut", "latest", "recent", "what", "is", "with", "do",
+              "details", "2025", "2026", "2027", "published", "issued"}
+    tokens = [t for t in _tokens(text) if t not in ignore and not t.isdigit()]
+    primary = _primary_search_text(record)
+    secondary = _secondary_search_text(record)
+    score = 0.0
+    for token in tokens:
+        pat = rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
+        if re.search(pat, primary):
+            score += 6.0
+        elif re.search(pat, secondary):
+            score += 2.0
+    return score
+
+
+def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
+                              sort_latest=False, issue_date=None):
+    """Find notices with strict topic/year/date constraints; never substitute others.
+
+    Uses MongoDB's indexed status filter and a bounded result set. A targeted
+    search intentionally does not use a broad Pinecone fallback because that
+    can return a confident answer from a different exam/year/topic.
+    """
+    wanted = max(0, min(20, int(top_k)))
+    if not wanted:
+        return []
+    topics = detect_search_topics(question)
+    year = force_year if force_year is not None else extract_year_from_question(question)
+    target_date = issue_date or _requested_issue_date_any_position(question)
+    # A date request is narrower than a year request. Its calendar date is
+    # already checked against the official issue_date.
+    records = notices_collection.find({"status": "processed"})
+    selected = []
+    for record in records:
+        if topics and not _search_topic_matches(record, topics):
+            continue
+        if not _question_scope_matches(question, record):
+            continue
+        if target_date is not None and parse_issue_date(record).date() != target_date:
+            continue
+        issued_year_request = bool(re.search(
+            r"\b(?:issued|published|dated)\s+in\s+20\d{2}\b",
+            str(question or ""), re.I,
+        ))
+        if target_date is None and year is not None:
+            year_ok = (parse_issue_date(record).year == year if issued_year_request
+                       else _year_scope_matches(record, year))
+            if not year_ok:
+                continue
+        selected.append(record)
+    if sort_latest or target_date is not None:
+        selected.sort(key=lambda r: (parse_issue_date(r), _notice_search_score(question, r)), reverse=True)
+    else:
+        selected.sort(key=lambda r: (_notice_search_score(question, r),
+                                     parse_issue_date(r)), reverse=True)
+    seen = set()
+    filtered = []
+    for record in selected:
+        identity = str(record.get("notice_id") or record.get("_id") or "")
+        if identity in seen:
+            continue
+        seen.add(identity)
+        filtered.append(record)
+        if len(filtered) >= wanted:
+            break
+    if DEBUG():
+        print(f"[UniAI Retrieval] matched={len(selected)} selected={len(filtered)} "
+              f"topics={sorted(topics)} year={year} issue_date={target_date} "
+              f"query={question!r}", flush=True)
+    return filtered

@@ -7,6 +7,7 @@ session store (e.g., MongoDB) plus an authentication/authorization design.
 """
 
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -159,7 +160,7 @@ def chat(request: ChatRequest):
         raise
     except Exception as exc:
         # Don't expose internal MongoDB/Pinecone/API credentials in HTTP errors.
-        print(f"[UniAI API] Chat failed ({type(exc).__name__})")
+        logging.exception("[UniAI API] Chat failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=500, detail="Unable to generate an answer.")
     finally:
         _release_session(cid)

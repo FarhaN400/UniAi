@@ -31,7 +31,7 @@ class QueryUnderstandingResult(BaseModel):
     requested_field: Optional[str] = None
 
 
-SYSTEM_PROMPT = """You are the Query Understanding Layer for UniAI, the official University AI Assistant for MAKAUT.
+SYSTEM_PROMPT = """You are the Query Understanding Layer for UniAI, an independent academic assistant that explains official MAKAUT notices.
 Your job is ONLY to analyze the student's message in the context of recent conversation state and output valid JSON.
 DO NOT answer the student's question.
 DO NOT invent any dates, notice names, fees, deadlines, eligibility criteria, procedures, years, or university facts.
@@ -133,8 +133,9 @@ def get_understanding_model():
             _understanding_chat = ChatGroq(
                 model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
                 temperature=0,
-                max_tokens=512,
-                max_retries=2,
+                max_tokens=768,
+                max_retries=0,
+                timeout=float(os.getenv("UNIAI_CLASSIFIER_TIMEOUT", "10")),
             )
         except Exception as e:
             print(f"[QueryUnderstanding] LLM initialization warning: {e}")
@@ -347,11 +348,32 @@ def _is_conversational_casual(text):
 
 
 def _detect_explicit_topic_or_entity(text):
-    """Detect whether the current message explicitly introduces a university topic or entrance."""
-    text_lower = text.lower()
-    for top in ["wbjee", "wbjeeb", "jeca", "jelet", "jemat", "pget", "cet", "hostel", "durga puja", "holiday", "u-frams", "face registration", "m.pharm", "games", "sports"]:
-        if re.search(rf"\b{re.escape(top)}\b", text_lower):
-            return "wbjee" if top in ["wbjee", "wbjeeb"] else top
+    """Recognize ALL supported notice subjects, including plural holidays.
+
+    Do not classify 'recent holiday notices' as global latest notices.
+    """
+    text_lower = str(text or "").lower()
+    patterns = (
+        ("wbjee", r"\bwbjeeb?\b"),
+        ("jeca", r"\bjeca\b"),
+        ("jelet", r"\bjelet\b"),
+        ("jemat", r"\b(?:wbjemat|jemat)\b"),
+        ("pget", r"\bpget\b"),
+        ("cet", r"\bcet\b"),
+        ("hostel", r"\bhostels?\b"),
+        ("holiday", r"\b(?:holidays?|puja|vacation)\b"),
+        ("frams", r"\b(?:u[-‑]?frams|face registration)\b"),
+        ("registration", r"\bregistration\b"),
+        ("scholarship", r"\bscholarships?\b"),
+        ("exam", r"\b(?:exams?|examinations?|semester|routine)\b"),
+        ("placement", r"\b(?:placements?|recruitment)\b"),
+        ("ragging", r"\b(?:ragging|discipline)\b"),
+        ("vacant", r"\b(?:vacant|vacancies|decentralized|decentralised)\b"),
+        ("affiliation", r"\b(?:affiliation|non[- ]?aicte)\b"),
+    )
+    for topic, pattern in patterns:
+        if re.search(pattern, text_lower):
+            return topic
     return None
 
 

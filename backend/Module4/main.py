@@ -304,7 +304,7 @@ def is_notice_detail_follow_up(question):
 
 def format_notice_line(record, number=None):
     """Render one notice with a headline and only its essential details."""
-    data = record.get("structured_data", {})
+    data = record.get("structured_data") or {}
     title = data.get("title") or record.get("title") or "Untitled notice"
     headline = f"{number}. {title}" if number is not None else title
     lines = [headline]
@@ -350,7 +350,8 @@ model = ChatGroq(
     model=MODEL_NAME,
     temperature=0,
     max_tokens=2048,
-    max_retries=2,
+    max_retries=0,
+    timeout=float(os.getenv("UNIAI_GROQ_TIMEOUT", "18")),
 )
 
 rag_chain = rag_prompt | model
@@ -741,7 +742,7 @@ def answer_from_records(question, records, active_notice=None, current_state=Non
             and (malformed_multinotice or not expected_ids.issubset(validated_ids))
         )
 
-        if needs_comparison_retry:
+        if needs_comparison_retry and os.getenv("UNIAI_ENABLE_LLM_REPAIRS", "0") == "1":
             repair_question = (
                 question + "\n\nCOMPARISON OUTPUT CORRECTION: The previous "
                 "response failed evidence validation or omitted a compared "
@@ -792,7 +793,7 @@ def answer_from_records(question, records, active_notice=None, current_state=Non
             missing_facets = _missing_notice_overview_facets(
                 question, records_by_id, evidence, claims,
             )
-            if missing_facets:
+            if missing_facets and os.getenv("UNIAI_ENABLE_LLM_REPAIRS", "0") == "1":
                 if debug_phase2:
                     print("[UniAI] Missing overview facets:", sorted(missing_facets), flush=True)
                 repair_question = (
@@ -999,236 +1000,464 @@ def _handle_casual_chat(question, current_state=None):
     return f"Hello{greeting_suffix}! I am UniAI, your assistant for MAKAUT university notices. How can I help you today?"
 
 
-def ask_uniai(question, state=None):
-    """Ask a university notice question and return the final answer."""
-    global last_notice_records, chat_history
+# ---------------------------------------------------------------------------
+# Phase 6: deterministic routing, source-preserving follow-ups and safe answers
+# ---------------------------------------------------------------------------
+# The RAG claim validator above is retained for complex, non-structured queries.
+# Straightforward searches and metadata questions do not require an LLM call.
 
-    if not question or not str(question).strip():
-        return "Please enter a question."
 
-    st = state if state is not None else globals()["state"]
-    if st is globals()["state"]:
-        _sync_state()
+def _record_source(record):
+    url = str(record.get("url") or "").strip()
+    return f"Official source: {url}" if url else "Official source PDF URL is unavailable in this record."
 
-    # Fast path: Follow-up requesting single notice or detail when active notice exists
-    if is_single_notice_follow_up(question) and (st.get_active_notice() or st.get_last_notice_records()):
-        active = st.get_active_notice() or st.get_last_notice_records()[0]
-        content = format_notice_line(active)
-        st.append_turn(question, content, records=[active], active_notice=active)
-        if st is globals()["state"]:
-            _sync_back()
-        return content
 
-    # A multi-notice list is ambiguous until the student chooses a notice.
-    # Never silently treat its first item as the active notice.
-    detail_candidates = st.get_last_notice_records()
-    detail_active = st.get_active_notice() or (
-        detail_candidates[0] if len(detail_candidates) == 1 else None
-    )
-    if (is_notice_detail_follow_up(question) and detail_active
-            and not explicitly_changes_notice_topic(question, detail_active)):
-        return answer_from_records(
-            question, [detail_active], active_notice=detail_active,
+def _record_heading(record):
+    sd = record.get("structured_data") or {}
+    return str(sd.get("title") or record.get("title") or "Untitled notice")
+
+
+def _plain(value):
+    if isinstance(value, dict):
+        return "; ".join(f"{k.replace('_', ' ')}: {_plain(v)}" for k, v in value.items()
+                         if v is not None and _plain(v))
+    if isinstance(value, (tuple, list)):
+        return "; ".join(str(v).strip() for v in value if v is not None and str(v).strip())
+    return str(value or "").strip()
+
+
+def _save_reply(st, question, answer, records=None, *, active=None, preserve=False):
+    st.append_turn(question, answer, records=records, active_notice=active,
+                   preserve_notice_list=preserve)
+    return answer
+
+
+def _structured_notice_overview(record, *, max_points=9):
+    """Expanded factual notice summary; never invent missing OCR fields."""
+    sd = record.get("structured_data") or {}
+    lines = [_record_heading(record)]
+    if sd.get("issue_date"):
+        lines.append(f"Issued: {_plain(sd['issue_date'])}")
+    if sd.get("reference_no"):
+        lines.append(f"Reference: {_plain(sd['reference_no'])}")
+    if sd.get("target_audience"):
+        lines.append(f"Who it concerns: {_plain(sd['target_audience'])}")
+    if sd.get("summary"):
+        lines.append(f"Overview: {_plain(sd['summary'])}")
+    if sd.get("action_required"):
+        lines.append(f"Action required: {_plain(sd['action_required'])}")
+    dates = sd.get("important_dates") or {}
+    if isinstance(dates, dict):
+        if dates.get("start_date"):
+            lines.append(f"Start date (as extracted): {_plain(dates['start_date'])}")
+        if dates.get("last_date"):
+            lines.append(f"Last date (as extracted): {_plain(dates['last_date'])}")
+    points = sd.get("key_points") or []
+    if not isinstance(points, (list, tuple)):
+        points = [points]
+    unique = []
+    for point in points:
+        if not point:
+            continue
+        candidate = str(point).strip()
+        # Unsafe OCR paraphrases can invert mandatory-subject requirements.
+        # Do not publish an ambiguous eligibility claim as a verified rule.
+        if re.search(r"\bPhysics\s*,\s*Mathematics\s*,\s*or\b", candidate, re.I) or (
+            re.search(r"\beligibilit", candidate, re.I) and
+            re.search(r"\b(?:45|40)\s*%\s+aggregate\b", candidate, re.I)
+        ):
+            candidate = ("Eligibility extraction is ambiguous. Verify mandatory "
+                         "subjects and the marks calculation in the official PDF.")
+        if candidate not in unique:
+            unique.append(candidate)
+    if unique:
+        lines.append("Important details:")
+        lines.extend(f"- {point[:650]}" for point in unique[:max_points])
+    lines.append(_record_source(record))
+    return "\n".join(lines)
+
+
+def _field_answer(question, record, field=None):
+    """Answer high-confidence field questions without risky unvalidated LLM text.
+
+    Return None only when the question is complex and needs an evidence-grounded
+    RAG answer. Otherwise return an explicit answer/source even when a field is
+    absent from extracted structured data.
+    """
+    sd = record.get("structured_data") or {}
+    lower = str(question or "").casefold()
+    source = _record_source(record)
+    title = _record_heading(record)
+    # A request for reopening is NOT a request to list more hostel notices.
+    # Closure-end dates do not establish an official reopening date by themselves.
+    if re.search(r"\breopen(?:s|ed|ing)?\b", lower):
+        candidates = [sd.get("action_required"), *(sd.get("key_points") or []),
+                      sd.get("summary")]
+        for statement in candidates:
+            value = _plain(statement)
+            if re.search(r"\breopen(?:s|ed|ing)?\b", value, re.I) and re.search(
+                r"\b(?:\d{1,2}[-/]\d{1,2}[-/]20\d{2}|\d{1,2}\s+[A-Za-z]+\s+20\d{2})\b", value
+            ):
+                return f"According to '{title}': {value}\n{source}"
+        return (f"I cannot confirm an explicit reopening date from the extracted "
+                f"details of '{title}'. Closure dates do not automatically "
+                f"establish a reopening date. Please check the original PDF.\n{source}")
+    if field == "source" or re.search(r"\b(?:official\s+(?:pdf\s+)?(?:source|link)|pdf\s+(?:source|link)|source\s+url)\b", lower):
+        return f"Source for '{title}':\n{source}"
+    if field == "reference_number":
+        value = sd.get("reference_no")
+        return (f"Reference number: {_plain(value)}\n{source}" if value
+                else f"The extracted notice has no verified reference number.\n{source}")
+    if field == "issue_date":
+        value = sd.get("issue_date")
+        return (f"Issue date: {_plain(value)}\n{source}" if value
+                else f"The issue date is not available in the extracted record.\n{source}")
+    if field == "deadline" or re.search(r"\b(?:deadline|last\s+date|due\s+date)\b", lower):
+        verified = _verified_application_deadline(question, record)
+        if verified:
+            return f"{verified}\n{source}"
+        dates = sd.get("important_dates") or {}
+        date_value = dates.get("last_date") if isinstance(dates, dict) else None
+        if date_value:
+            return (f"The extracted notice lists a last date of {_plain(date_value)}. "
+                    f"Check the PDF to confirm which action it applies to.\n{source}")
+        return f"I could not verify a deadline from this notice's extracted details.\n{source}"
+    if field == "fees" or re.search(r"\b(?:application\s+fee|fees?|charges?)\b", lower):
+        fees = sd.get("fees") or {}
+        amount = fees.get("amount") if isinstance(fees, dict) else None
+        currency = fees.get("currency") if isinstance(fees, dict) else None
+        application_specific = "application" in lower
+        if application_specific:
+            # The schema's generic fees.amount is not necessarily an application
+            # fee. Extract an explicitly labeled amount from the official OCR
+            # or structured text; never convert an admission fee into one.
+            texts = [str(sd.get("action_required") or "")]
+            texts.extend(str(item) for item in (sd.get("key_points") or []))
+            texts.append(str(record.get("raw_text") or "")[:20000])
+            money = r"(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:rupees|INR)"
+            for evidence_line in texts:
+                match = re.search(
+                    rf"\bapplication\s+fees?\b.{{0,90}}?(?:{money})|"
+                    rf"(?:{money}).{{0,70}}?\bapplication\s+fees?\b",
+                    evidence_line, re.I | re.S,
+                )
+                if match:
+                    fragment = " ".join(match.group(0).split())
+                    return f"The official notice states: {fragment}.\n{source}"
+            return ("I cannot confirm an application-fee amount from the available "
+                    f"extracted details of '{title}'. Consult the official PDF.\n{source}")
+        if amount not in (None, "", "null", "None"):
+            return f"Fee listed in this notice: {_plain(amount)} {_plain(currency)}.\n{source}"
+        return f"I cannot verify a fee amount from the extracted notice details.\n{source}"
+    if field in ("documents", "eligibility", "procedure", "location", "time", "contact"):
+        expressions = {
+            "documents": r"\b(?:documents?|certificate|photocopies?|originals?|aadhaar|marksheets?|proof|verification)\b",
+            "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2)\b",
+            "procedure": r"\b(?:apply|application|registration|submit|submission|portal|steps?|report(?:ing)?|procedure|process)\b",
+            "location": r"\b(?:campus|building|venue|room|location|reporting\s+(?:at|venue)|salt\s+lake|haringhata)\b",
+            "time": r"\b(?:reopen|leave|closing|closure|time|timing|schedule|hours?|a\.m\.|p\.m\.|date)\b",
+            "contact": r"\b(?:contact|phone|mobile|email|helpline|office)\b",
+        }
+        pat = re.compile(expressions[field], re.I)
+        relevant = []
+        for entry in [sd.get("action_required"), *(sd.get("key_points") or [])]:
+            value = _plain(entry)
+            if value and pat.search(value) and value not in relevant:
+                relevant.append(value)
+        # For documentary questions use high-signal OCR excerpts only when
+        # the structured fields have no matching details.
+        if not relevant:
+            excerpts = extract_relevant_snippets(
+                record.get("raw_text") or "", question, max_snippets=2,
+                max_chars=450,
+            )
+            relevant = [e for e in excerpts if pat.search(e)]
+        if relevant:
+            return f"From '{title}':\n" + "\n".join(
+                f"- {item[:700]}" for item in relevant[:7]
+            ) + f"\n{source}"
+        return (f"I couldn't verify the requested {field} information from the "
+                f"available extracted details of '{title}'. Check the original PDF.\n{source}")
+    if field in ("details", "summary") or re.search(
+        r"\b(?:explain|summari[sz]e|details?|overview|describe|tell me more)\b", lower
+    ):
+        return _structured_notice_overview(record)
+    return None
+
+
+def _out_of_scope(question):
+    lower = str(question or "").casefold()
+    # Explicit non-university subjects should not be routed to random PDF data.
+    return bool(re.search(
+        r"\b(?:cricket|football|world\s+cup|ipl|movie|film|celebrity|weather|stock\s+market|bitcoin)\b",
+        lower,
+    ) and not re.search(r"\b(?:notice|university|makaut|campus|college)\b", lower))
+
+
+def _is_list_request(question):
+    lower = str(question or "").lower()
+    return bool(re.search(
+        r"\b(?:find|show|list|give|provide|any|are\s+there|what\s+notices|which\s+notices|recent\s+notices|latest\s+notices)\b",
+        lower,
+    )) and not bool(re.search(r"\b(?:what\s+is\s+the\s+(?:deadline|fee)|how\s+much)\b", lower))
+
+
+def _is_single_target(question, parsed):
+    lower = str(question or "").lower()
+    if getattr(parsed, "count", None) == 1:
+        return True
+    if re.search(r"\b(?:notices|notifications|list|all|several|multiple)\b", lower):
+        return False
+    return bool(re.search(r"\b(?:the|a|one|single)\s+(?:[\w-]+\s+){0,12}?(?:notice|notification)\b", lower))
+
+
+def _no_matches(question):
+    return ("I couldn't find a processed MAKAUT notice matching those exact "
+            "topic/date/year conditions in the current database. "
+            "I won't substitute an unrelated notice. Please try a broader query "
+            "or check the official MAKAUT notice board.")
+
+
+def _safe_grounded_answer(question, records, st, *, preserve=False):
+    """Use existing LLM+evidence checks; recover gracefully from provider failures."""
+    import logging
+    if not records:
+        return _save_reply(st, question, _no_matches(question), records=[])
+    original_list = list(st.get_last_notice_records()) if preserve else []
+    try:
+        answer = answer_from_records(
+            question, records, active_notice=records[0] if len(records) == 1 else None,
             current_state=st,
         )
+        if answer == NO_RESULTS_MESSAGE:
+            answer = (_structured_notice_overview(records[0]) if len(records) == 1 else
+                      format_notice_list(records))
+            _save_reply(st, question, answer, records=records,
+                        active=records[0] if len(records) == 1 else None,
+                        preserve=preserve)
+    except Exception:
+        logging.exception("[UniAI] Grounded answer model failed; using extracted notice facts")
+        answer = (_structured_notice_overview(records[0]) if len(records) == 1 else
+                  format_notice_list(records))
+        _save_reply(st, question, answer, records=records,
+                    active=records[0] if len(records) == 1 else None,
+                    preserve=preserve)
+    if preserve and original_list:
+        st.set_last_results(original_list)
+    return answer
 
-    # Query Understanding Layer
-    parsed = understand_query(question, st)
 
-    # A request like "explain this notice" is ambiguous immediately after a
-    # multi-notice list: there is no single active notice yet.
-    if (st.get_active_notice() is None
-            and len(st.get_last_notice_records()) > 1
-            and (is_notice_detail_follow_up(question)
-                 or parsed.intent == "notice_followup"
-                 or parsed.use_active_notice)
-            and not explicitly_changes_notice_topic(
-                question, st.get_last_notice_records()[0])):
-        content = (
-            "Which notice should I explain? Please choose a number from "
-            f"1 to {len(st.get_last_notice_records())}."
-        )
-        st.append_turn(question, content)
-        return content
+def _comparison_notice_answer(question, st):
+    """Compare distinct years without allowing the first year to filter both."""
+    from retrieve import retrieve_filtered_notices
+    years = list(dict.fromkeys(int(y) for y in re.findall(r"\b(20\d{2})\b", question)))
+    if len(years) < 2:
+        return None
+    found = []
+    missing = []
+    for year in years[:3]:
+        candidates = retrieve_filtered_notices(question, top_k=1,
+                                               force_year=year)
+        if candidates:
+            found.append((year, candidates[0]))
+        else:
+            missing.append(year)
+    lines = []
+    for year, record in found:
+        sd = record.get("structured_data") or {}
+        details = [str(p) for p in sd.get("key_points") or [] if re.search(
+            r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
+        )]
+        if not details:
+            details = [str(sd.get("summary") or "No matching details extracted")]
+        lines.append(f"{year} — {_record_heading(record)}")
+        lines.extend(f"- {point[:700]}" for point in details[:5])
+        lines.append(_record_source(record))
+    if missing:
+        lines.append("I couldn't find a matching processed notice for: " +
+                     ", ".join(map(str, missing)) + ". No comparison facts were invented.")
+    if not lines:
+        lines = [_no_matches(question)]
+    records = [record for _, record in found]
+    return _save_reply(st, question, "\n\n".join(lines), records=records,
+                       active=None, preserve=False)
 
-    # Multi-document follow-ups must reuse EXACTLY the documents referenced
-    # by the previous answer, not the Pinecone candidate pool.
-    if parsed.intent == "multi_notice_followup":
-        prior = st.get_last_answer_records()
-        if os.getenv("UNIAI_DEBUG", "0") == "1":
-            print("[UniAI] multi-notice follow-up; reused notice IDs:",
-                  [r.get("notice_id") for r in prior])
-        if len(prior) >= 2:
-            return answer_from_records(question, prior, current_state=st)
-        return "I need the two notices to compare. Please ask me to show them first."
 
-    # 1. Casual Chat
+def ask_uniai(question, state=None):
+    """Reliable entry point for notice search, follow-ups, and grounded Q&A."""
+    from retrieve import (retrieve_filtered_notices, detect_search_topics,
+                          _requested_issue_date_any_position)
+    from Module4.query_understanding import fallback_understand_query
+    import logging
+
+    question = str(question or "").strip()
+    if not question:
+        return "Please enter a question."
+    st = state if state is not None else globals()["state"]
+    if _out_of_scope(question):
+        return _save_reply(st, question, "I only answer questions about MAKAUT university notices. "
+                           "Please ask about admissions, exams, hostels, registration or other notices.")
+
+    # Avoid a Groq classification API call for deterministic student queries.
+    # Opt-in classifier remains available for experiments without breaking
+    # production if Groq is rate-limited or unavailable.
+    if os.getenv("UNIAI_USE_LLM_CLASSIFIER", "0") == "1":
+        try:
+            parsed = understand_query(question, st)
+        except Exception:
+            logging.exception("[UniAI] Classifier failed; using deterministic parser")
+            parsed = fallback_understand_query(question, st)
+    else:
+        parsed = fallback_understand_query(question, st)
+
     if parsed.intent == "casual_chat":
-        content = _handle_casual_chat(question, current_state=st)
-        st.append_turn(question, content)
-        if st is globals()["state"]:
-            _sync_back()
-        return content
+        # 'My name is Example Student.' is an explicit name statement despite
+        # the generic word 'student'. Don't infer a name from any other phrase.
+        name_match = re.search(
+            r"\b(?:my\s+name\s+is|call\s+me|correct\s+my\s+name\s+to)\s+"
+            r"([A-Za-z]+(?:\s+[A-Za-z]+)?)\b", question, re.I,
+        )
+        if name_match:
+            full_name = name_match.group(1).strip().title()
+            st.session_memory["user_name"] = full_name
+            reply = f"Got it, {full_name}! How can I help with MAKAUT notices?"
+        else:
+            reply = _handle_casual_chat(question, current_state=st)
+        return _save_reply(st, question, reply)
 
-    # 2. Ordinal Follow-up ("now the 5th one", "show the second one")
     if parsed.intent == "ordinal_followup":
-        ordinal = parsed.ordinal or extract_notice_ordinal(question) or 1
-        last_records = st.get_last_notice_records()
+        original_list = st.get_last_notice_records()
+        ordinal = parsed.ordinal
+        if ordinal == -1:
+            ordinal = len(original_list)
+        if not original_list:
+            return _save_reply(st, question,
+                               "Please ask me to list notices first, then choose an item number.")
+        if not ordinal or not 1 <= ordinal <= len(original_list):
+            return _save_reply(st, question,
+                               f"The original list contains {len(original_list)} notices. "
+                               f"Please choose 1–{len(original_list)}.")
+        selected = original_list[ordinal - 1]
+        if re.search(r"\b(?:explain|details?|summary|summari[sz]e|describe)\b", question, re.I):
+            answer = _structured_notice_overview(selected)
+        else:
+            answer = format_notice_line(selected)
+        return _save_reply(st, question, answer, records=[selected], active=selected,
+                           preserve=True)
 
-        # Ordinals belong ONLY to the list returned in this conversation.
-        # Do not fall back to a module-global latest query or a fresh search.
-        if not last_records:
-            content = (
-                "Please ask me to list the notices first, then choose one "
-                "by its number."
-            )
-            st.append_turn(question, content)
-            return content
-        if ordinal < 1 or ordinal > len(last_records):
-            content = (
-                f"This conversation has {len(last_records)} listed "
-                f"notice(s). Please choose a number from 1 to {len(last_records)}."
-            )
-            st.append_turn(question, content)
-            return content
-        selected_record = last_records[ordinal - 1]
-
-        content = format_notice_line(selected_record)
-        st.append_turn(
-            question, content, records=[selected_record],
-            active_notice=selected_record, preserve_notice_list=True,
-        )
-        if st is globals()["state"]:
-            _sync_back()
-        return content
-
-    # 3. Active Notice Follow-up. A new explicit year/topic must trigger fresh search.
-    active_record = st.get_active_notice()
-    active_text = ""
-    if active_record:
-        active_text = str(active_record.get("title", "")) + " " + str(active_record.get("structured_data", {}))
+    # A named NEW topic or year always overrides a previous active notice.
+    active = st.get_active_notice()
+    changed = explicitly_changes_notice_topic(question, active)
+    named_topics = detect_search_topics(question)
     explicit_year = re.search(r"\b(20\d{2})\b", question)
-    conflicting_year = bool(explicit_year and active_record and explicit_year.group(1) not in active_text)
-    explicit_topic = extract_supported_topic(question)
-    conflicting_topic = bool(explicit_topic and active_record and explicit_topic not in active_text.lower())
-    # Detect explicitly named new subjects (e.g. CET registration after hostel).
-    topic_switch = explicitly_changes_notice_topic(question, active_record)
-    # Also guard when only last results exist (no active notice explicitly set).
-    if not active_record and st.get_last_notice_records():
-        topic_switch = explicitly_changes_notice_topic(
-            question, st.get_last_notice_records()[0]
-        )
-    conflicting_topic = conflicting_topic or topic_switch
-    # Diagnostics for follow-up selection. Enable with UNIAI_DEBUG=1.
-    if os.getenv("UNIAI_DEBUG", "0").lower() in ("1", "true", "yes"):
-        print("\n[DEBUG FOLLOW-UP]")
-        print("Question:", question)
-        print("Parsed intent:", parsed.intent)
-        print("Use active notice:", parsed.use_active_notice)
-        print("Conflicting year:", conflicting_year)
-        print("Conflicting topic:", conflicting_topic)
-        print("Active notice ID:", st.get_active_notice_id())
-        print("Last notice count:", len(st.get_last_notice_records()))
+    is_new_search = bool(re.search(r"\b(?:find|search|list)\b", question, re.I)) or (
+        bool(re.search(r"\b(?:show|give|are\s+there)\b", question, re.I))
+        and bool(named_topics or explicit_year or re.search(
+            r"\b(?:notices?|notifications?|latest|recent|new)\b", question, re.I))
+    )
+    # 'Give me its source' and 'show this notice's deadline' reuse the active
+    # record even though their sentences start with a command verb.
+    if active and not changed and not explicit_year and re.search(
+        r"\b(?:its|this\s+notice|that\s+notice|about\s+it|there)\b",
+        question, re.I,
+    ):
+        is_new_search = False
+    # A single active notice owns field questions, even when its topic is
+    # mentioned explicitly (e.g. "When will the hostel reopen?").
+    # Global latest/today/yesterday requests remain fresh searches.
+    global_temporal = parsed.intent in ("latest_notices", "today_notices", "yesterday_notices")
+    if active is not None and not changed and not is_new_search and not global_temporal and (
+        parsed.intent == "notice_followup" or parsed.use_active_notice or
+        parsed.requested_field is not None or
+        re.search(r"\b(?:this\s+notice|that\s+notice|its|there|it)\b", question, re.I)
+    ):
+        result = _field_answer(question, active, parsed.requested_field)
+        if result is not None:
+            return _save_reply(st, question, result, records=[active], active=active,
+                               preserve=True)
+        return _safe_grounded_answer(question, [active], st, preserve=True)
 
-    if (parsed.intent == "notice_followup" or parsed.use_active_notice) and not (conflicting_year or conflicting_topic):
-        recent_records = st.get_last_notice_records()
-        active = st.get_active_notice() or (
-            recent_records[0] if len(recent_records) == 1 else None
-        )
-        if active:
-            if os.getenv("UNIAI_DEBUG", "0").lower() in ("1", "true", "yes"):
-                print("Follow-up route: active notice")
-                print("Selected notice ID:", active.get("notice_id"))
-                print("Selected notice title:", active.get("title"))
-                print("Structured data:", active.get("structured_data"))
-                print("Source URL:", active.get("url"))
-            return answer_from_records(question, [active], active_notice=active, current_state=st)
-    elif os.getenv("UNIAI_DEBUG", "0").lower() in ("1", "true", "yes"):
-        print("Follow-up route: skipped; proceeding to fresh retrieval")
+    # Do not start a new database search for generic facts about one of several
+    # previously displayed notices. Require disambiguation instead.
+    if (active is None and len(st.get_last_notice_records()) > 1
+            and not is_new_search and not named_topics and not explicit_year
+            and (parsed.requested_field is not None or re.search(
+                r"\b(?:what|when|where|who|how|explain|its|this|that|there)\b",
+                question, re.I,
+            ))):
+        return _save_reply(st, question, "Which notice do you mean? "
+                           f"Choose a number from 1 to {len(st.get_last_notice_records())}.")
 
-    # 4. Topic Search
-    topic = parsed.topic or extract_supported_topic(question)
-    if topic:
-        is_latest_topic = (is_latest_topic_notice_query(question)
-                           or (parsed.temporal_scope in ("latest", "recent")
-                               and parsed.intent == "topic_search"))
-        if is_latest_topic:
-            try:
-                records = retrieve_topic_notices(topic, top_k=1)
-            except Exception as error:
-                print(f"Retrieval failed: {error}")
-                return NO_RESULTS_MESSAGE
+    # An under-specified question after a multi-notice list requires selection.
+    if not is_new_search and parsed.intent == "notice_followup" and not active:
+        if len(st.get_last_notice_records()) > 1:
+            return _save_reply(st, question, "Which notice do you mean? "
+                               f"Choose a number from 1 to {len(st.get_last_notice_records())}.")
 
-            if not records:
-                return NO_RESULTS_MESSAGE
+    if parsed.intent == "multi_notice_followup":
+        earlier = st.get_last_answer_records()
+        if len(earlier) >= 2:
+            return _safe_grounded_answer(question, earlier, st, preserve=True)
+        return _save_reply(st, question, "Please choose two notices to compare first.")
 
-            content = format_notice_line(records[0])
-            st.append_turn(question, content, records=records, active_notice=records[0])
-            if st is globals()["state"]:
-                _sync_back()
-            return content
+    if re.search(r"\b(?:compare|comparison|difference\s+between)\b", question, re.I):
+        try:
+            compared = _comparison_notice_answer(question, st)
+            if compared is not None:
+                return compared
+        except Exception:
+            logging.exception("[UniAI] Comparison retrieval failed")
+            return _save_reply(st, question, "Notice comparison is temporarily unavailable. Please retry.")
 
-    # 5. Time-based Queries (latest, today, yesterday)
-    is_latest_query = parsed.intent in ("latest_notices", "today_notices", "yesterday_notices") or is_latest_notice_query(question)
-    is_comparison = bool(re.search(r"\b(compare|comparison|differences? between|respective|both notices)\b", question, re.I))
-    requested_top_k = (max(5, parsed.count or 0) if is_comparison else
-                       (parsed.count or extract_requested_count(question) or (1 if is_latest_query else 5)))
-
-    # Parsed standalone queries are useful for contextual follow-ups; for fresh searches,
-    # retain explicit years and wording from the original student question.
-    search_query = question
-    if parsed.intent in ("today_notices", "yesterday_notices", "latest_notices"):
-        search_query = parsed.standalone_query or question
-    if os.getenv("UNIAI_DEBUG", "0") == "1":
-        print(f"[UniAI] intent={parsed.intent}, year={parsed.year}, "
-              f"topic={parsed.topic}, count={parsed.count}, search={search_query!r}")
-
+    # Chronological global requests do not hit Pinecone or Groq.
+    is_pure_latest = parsed.intent in ("latest_notices", "today_notices", "yesterday_notices") and not named_topics
+    issue_date = _requested_issue_date_any_position(question)
+    topic_specific = bool(named_topics)
     try:
-        # Semantic queries retrieve a larger candidate pool before reranking;
-        # only up to five evidence records are sent to the answer model.
-        retrieval_k = requested_top_k if is_latest_query else max(10, requested_top_k)
-        records = retrieve_context(search_query, top_k=retrieval_k)
-        # Filter BEFORE trimming the candidate set to the LLM context size.
-        # Exact issue-date notice queries must not mix similar older notices.
-        if not is_latest_query and not is_comparison:
-            records, explicit_date, ambiguous = select_notice_evidence(
-                search_query, records, comparison=False
-            )
-            if ambiguous:
-                return (
-                    "I found multiple notices on that date matching the topic. "
-                    "Please specify the notice title or reference number."
-                )
-        if not is_latest_query:
-            records = filter_explicit_notice_scope(search_query, records)
-        if not is_latest_query:
-            records = records[:5]
-    except Exception as error:
-        print(f"Retrieval failed: {error}")
-        return NO_RESULTS_MESSAGE
+        requested = getattr(parsed, "count", None) or extract_requested_count(question)
+        count = min(10, max(1, int(requested or (1 if _is_single_target(question, parsed) else 5))))
+        if is_pure_latest:
+            from retrieve import retrieve_time_based
+            if parsed.intent == "today_notices":
+                records = retrieve_time_based("notices published today", top_k=count)
+            elif parsed.intent == "yesterday_notices":
+                records = retrieve_time_based("notices published yesterday", top_k=count)
+            else:
+                records = retrieve_time_based("latest university notices", top_k=count)
+        elif topic_specific or issue_date is not None or explicit_year:
+            records = retrieve_filtered_notices(question, top_k=count,
+                                                 sort_latest=bool(re.search(
+                                                     r"\b(?:latest|recent|most\s+recent)\b", question, re.I)))
+        else:
+            records = retrieve_context(question, top_k=count)
+    except Exception:
+        logging.exception("[UniAI] Retrieval error")
+        return _save_reply(st, question,
+                           "I couldn't access the notice database right now. "
+                           "Please retry in a moment; this is not a confirmed no-results answer.")
 
     if not records:
-        return NO_RESULTS_MESSAGE
+        if parsed.intent == "today_notices":
+            reply = "No processed notices with today's official issue date are currently available in the database."
+        elif parsed.intent == "yesterday_notices":
+            reply = "No processed notices with yesterday's official issue date are currently available in the database."
+        else:
+            reply = _no_matches(question)
+        return _save_reply(st, question, reply, records=[])
 
-    if is_latest_query:
-        # Session-specific metadata; never mutate module-global chat context.
-        st.session_memory["last_latest_question"] = question
-        if requested_top_k == 1 or len(records) == 1:
-            content = format_notice_line(records[0])
-            st.append_turn(question, content, records=records, active_notice=records[0])
-            if st is globals()["state"]:
-                _sync_back()
-            return content
+    if _is_list_request(question) or is_pure_latest or issue_date is not None:
+        content = (format_notice_list(records) if len(records) > 1
+                   else format_notice_line(records[0]))
+        return _save_reply(st, question, content, records=records,
+                           active=records[0] if len(records) == 1 else None)
 
-        content = format_notice_list(records)
-        st.append_turn(question, content, records=records, active_notice=None)
-        if st is globals()["state"]:
-            _sync_back()
-        return content
-
-    active = records[0] if len(records) == 1 else None
-    return answer_from_records(question, records, active_notice=active, current_state=st)
-
+    # Single-document specific questions use precise field extraction first.
+    if len(records) == 1:
+        field_answer = _field_answer(question, records[0], parsed.requested_field)
+        if field_answer is not None:
+            return _save_reply(st, question, field_answer, records=records,
+                               active=records[0])
+    return _safe_grounded_answer(question, records, st)
 
 if __name__ == "__main__":
     print("\n🎓 UniAI — University AI Assistant")
