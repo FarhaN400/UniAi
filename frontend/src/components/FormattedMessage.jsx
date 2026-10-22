@@ -213,10 +213,12 @@ export default function FormattedMessage({ text, isUser = false }) {
   function flushList() {
     if (!currentList) return;
     const ListTag = currentList.type;
+    const isOl = currentList.type === 'ol';
     elements.push(
       <ListTag
         key={`list-${elements.length}`}
-        className={`my-2 space-y-1 pl-5 ${currentList.type === 'ul' ? 'list-disc' : 'list-decimal'} marker:text-brand-500`}
+        start={isOl ? (currentList.start || 1) : undefined}
+        className={`my-2 space-y-1 pl-5 ${isOl ? 'list-decimal' : 'list-disc'} marker:text-brand-500`}
       >
         {currentList.items.map((item, idx) => (
           <li key={idx} className="leading-6">
@@ -251,11 +253,14 @@ export default function FormattedMessage({ text, isUser = false }) {
     }
 
     // Ordered list: "1. item"
-    const numberMatch = line.match(/^(\s*)\d+\.\s+(.*)$/);
+    const numberMatch = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
     if (numberMatch) {
+      const itemNum = parseInt(numberMatch[2], 10);
       if (currentList && currentList.type !== 'ol') flushList();
-      if (!currentList) currentList = { type: 'ol', items: [] };
-      currentList.items.push(numberMatch[2]);
+      if (!currentList) {
+        currentList = { type: 'ol', start: !isNaN(itemNum) ? itemNum : 1, items: [] };
+      }
+      currentList.items.push(numberMatch[3]);
       continue;
     }
 

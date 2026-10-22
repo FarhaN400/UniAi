@@ -215,7 +215,7 @@ UniAI:   [Compares both notices, computes the exact date difference, and cites b
 * **Objective:** Deliver a modern, high-performance web application connecting students to official notices through an intuitive interface with verified link clickability.
 * **Key Components:**
   - **FastAPI REST API (`backend/app.py`):** Endpoints `/api/chat` and `/health`, session state isolation, TTL-based session eviction, and LAN CORS support.
-  - **Interactive Link Engine (`FormattedMessage.jsx`):** Parses raw URLs and Markdown links into styled, accessible links opening in new tabs. Distinguishes PDF circulars with document badges.
+  - **Interactive Markdown & Link Engine (`FormattedMessage.jsx`):** Parses raw URLs and Markdown links into styled, accessible links opening in new tabs. Distinguishes PDF circulars with document badges and preserves sequential ordered list numbers (`1.`, `2.`, `3.`, `4.`, `5.`) across multi-notice summaries.
   - **Notice Documents Tray:** Quick-access chip strip under assistant messages listing all cited documents.
   - **Real-Time Generation Progress Tracker:** Elapsed seconds timer with stage-based progress indicators.
   - **Verified Sources Drawer:** Slide-over panel displaying cited circular titles, dates, and direct links.

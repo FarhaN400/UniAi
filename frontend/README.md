@@ -19,7 +19,7 @@
 - **XSS & Protocol Protection**: Enforces safe protocol normalization (guards against unsafe `javascript:` or malformed URLs) and strips trailing sentence punctuation.
 
 ### 💬 2. Real-Time Conversational Chat Interface
-- **Formatted Markdown Engine**: Custom high-performance renderer for bullet lists, numbered lists, blockquotes, bold text, and inline code.
+- **Formatted Markdown Engine (`FormattedMessage.jsx`)**: Custom high-performance renderer for bullet lists, ordered/numbered lists, blockquotes, bold text, and inline code. Preserves explicit ordered list start indices (`<ol start={...}>`) so multi-notice responses (e.g. `1.`, `2.`, `3.`, `4.`, `5.`) retain their accurate sequential serial numbers across multi-line summaries, dates, and official source links without resetting to 1.
 - **Progress Tracking**: Real-time timer and multi-stage status indicator showing query execution phases (*"Understanding query & searching notices…"*, *"Analyzing documents…"*, *"Synthesizing claims with citations…"*) so users know local or cloud LLM inference is active.
 - **One-Click Response Copying**: Quickly copy formatted answers to clipboard.
 - **Graceful Error Handling & Retry**: Displays informative messages on network issues or local model timeouts with an instant **"Retry last query"** button.

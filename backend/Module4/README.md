@@ -171,6 +171,10 @@ The evidence verification pipeline guarantees responses are 100% grounded in off
    - When circulars mandate both Physics AND Mathematics as compulsory subjects, the validator rejects answers that misstate them as optional alternatives (*"Physics, Mathematics, or other subjects"*).
 5. **Cautious Missing-Value Guidance (`missing_amount_guidance`):**
    - When a student asks about a fee or placement package not stated in the circular, UniAI delivers data-grounded guidance without hallucinating numeric figures or assuming negative facts.
+6. **Sequential Notice List Formatting (`format_notice_list` & `format_notice_line`):**
+   - For multi-notice search results and chronological listings (e.g., *"give 5 recent notices"*), formats each record sequentially starting from 1 (`1.`, `2.`, `3.`, `4.`, `5.`).
+   - Includes headline, official issue date, university reference number, complete non-truncated summary, and direct official PDF source URL.
+   - Designed to work seamlessly with frontend markdown rendering so each numbered notice block maintains its explicit serial order without resetting to 1.
 
 ---
 

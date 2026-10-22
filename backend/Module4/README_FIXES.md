@@ -14,6 +14,7 @@ This document records the architectural improvements, bug fixes, and reliability
 ## 🔧 Key Improvements by Component
 
 ### 1. Assistant Orchestrator (`main.py`)
+- **Sequential Notice List Numbering (`format_notice_list`):** Formats multiple notices using sequential 1-based indexing (`1.`, `2.`, `3.`, `4.`, `5.`) with headlines, dates, reference numbers, summaries, and official URLs. Together with frontend markdown rendering, every notice retains its exact serial number (`start={index}`) even with multiline metadata blocks between items.
 - **Topical Routing Safeguard:** Topic queries are only routed to chronological "newest-notice" retrieval when the user's specific wording or classified intent explicitly requests the newest/latest notice, preventing general subject searches from arbitrarily returning single recent circulars.
 - **Candidate Pool Expansion:** Semantic topic queries now fetch a generous candidate pool (15–40 documents from Pinecone and MongoDB) before applying RRF ranking and candidate scoping. Only the top 5 highest-ranking verified documents are passed to the LLM context.
 - **Complete Sentence Truncation:** Summary formatters enforce clean sentence boundaries (avoiding cutting off text mid-word with ellipses).
