@@ -236,7 +236,7 @@ UniAI:   [Compares both notices, computes the exact date difference, and cites b
 | **Document Database** | MongoDB Atlas / PyMongo | Metadata, OCR raw text, and structured storage |
 | **PDF Processing & OCR** | `pypdf`, `pdf2image`, `pytesseract`, Pillow | Digital text extraction & 300 DPI OCR fallback |
 | **Data Validation** | Pydantic V2 | Strict JSON schema contracts (`extra="forbid"`) |
-| **LLM Inference Engines** | Groq & Ollama | Ultra-fast cloud inference (Llama 3.3 70B) & private local execution (Qwen 3 4B) |
+| **LLM Inference Engines** | Groq | Ultra-fast cloud inference (Llama 3.3 70B) & private local execution (Qwen 3 4B) |
 | **Vector Database** | Pinecone Serverless (`uniai` / `notices`) | Vector knowledge base with integrated embeddings |
 | **Prompt Orchestration** | LangChain Core | RAG prompts, claim parsers, and evidence chaining |
 | **Cloud Automation** | GitHub Actions | Serverless scheduled cron jobs (`17 */3 * * *`) |

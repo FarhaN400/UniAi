@@ -1293,7 +1293,7 @@ def ask_uniai(question, state=None):
     question = str(question or "").strip()
     if not question:
         return "Please enter a question."
-    st = state if state is not None else globals()["state"]
+    st = state if state is not None else ConversationState()
     if _out_of_scope(question):
         return _save_reply(st, question, "I only answer questions about MAKAUT university notices. "
                            "Please ask about admissions, exams, hostels, registration or other notices.")
@@ -1463,6 +1463,8 @@ if __name__ == "__main__":
     print("\n🎓 UniAI — University AI Assistant")
     print("Type 'exit' to stop.\n")
 
+    cli_state = ConversationState()
+
     while True:
         question = input("You: ").strip()
         if question.lower() in ("exit", "quit"):
@@ -1471,5 +1473,5 @@ if __name__ == "__main__":
         if not question:
             continue
 
-        answer = ask_uniai(question)
+        answer = ask_uniai(question, state=cli_state)
         print(f"\nUniAI: {answer}\n")
