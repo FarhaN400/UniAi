@@ -139,6 +139,47 @@ class FinalCitationsTests(unittest.TestCase):
         )
         self.assertEqual([x["notice_id"] for x in kept], ["jelet"])
 
+    def test_q17_q24_scraped_jelet_label_cannot_override_generic_pdf_title(self):
+        # Matches the observed production failure in jelet_verified.csv:
+        # website label mentions JELET, while the extracted PDF title is
+        # merely a general B.Tech Lateral / MCA Lateral registration notice.
+        wrong = notice(
+            "phase1", "Phase-1 Registration Notice for JELET and JECA "
+            "Decentralize AY 2025-26",
+            extracted_title="Opening of Phase 1 Registration for B.Tech "
+            "Lateral and MCA Lateral for AY 2025-26",
+            audience="JELET and JECA candidates",
+        )
+        correct = notice(
+            "jelet", "JELET-2025 Counselling Notice",
+            extracted_title="Counselling Instructions for JELET-2025 "
+            "Allotted Students",
+        )
+        ret = import_retrieve_offline([wrong, correct])
+        for question in (
+            "What is the official issue date of the JELET 2025 notice?",
+            "Give me eligibility criteria for JELET 2025.",
+        ):
+            with self.subTest(question=question):
+                kept = ret.enforce_source_scope(question, [wrong, correct])
+                self.assertEqual([r["notice_id"] for r in kept], ["jelet"])
+                matched = ret.retrieve_filtered_notices(question, top_k=5)
+                self.assertEqual([r["notice_id"] for r in matched], ["jelet"])
+
+    def test_jelet_non_specific_list_search_keeps_website_related_record(self):
+        # The stricter rule applies to FACTS, not general discovery; students
+        # can still discover a phase-1 circular by its official website label.
+        item = notice(
+            "phase1", "Phase-1 Registration Notice for JELET and JECA AY 2025-26",
+            extracted_title="Opening of Phase 1 Registration for B.Tech "
+            "Lateral and MCA Lateral for AY 2025-26",
+        )
+        ret = import_retrieve_offline([item])
+        kept = ret.enforce_source_scope(
+            "Find JELET 2025 registration notices", [item]
+        )
+        self.assertEqual([r["notice_id"] for r in kept], ["phase1"])
+
     def test_q24_jelet_eligibility_rejects_lateral_registration(self):
         rows = [
             notice("generic", "Opening Phase 1 Registration for B.Tech Lateral",
