@@ -1549,7 +1549,7 @@ def _comparison_notice_answer(question, st):
 def ask_uniai(question, state=None):
     """Reliable entry point for notice search, follow-ups, and grounded Q&A."""
     from retrieve import (retrieve_filtered_notices, detect_search_topics,
-                          _requested_issue_date_any_position)
+                          _requested_issue_date_any_position, enforce_source_scope)
     from Module4.query_understanding import fallback_understand_query
     import logging
 
@@ -1706,6 +1706,10 @@ def ask_uniai(question, state=None):
                                                      r"\b(?:latest|recent|most\s+recent)\b", question, re.I)))
         else:
             records = retrieve_context(question, top_k=count)
+        # Defense in depth: no source may be cited if its notice topic fails
+        # this query's explicit identity/scope constraints. Keep the filter
+        # after ALL retrieval paths, not only MongoDB-specific searches.
+        records = enforce_source_scope(question, records)
     except Exception:
         logging.exception("[UniAI] Retrieval error")
         return _save_reply(st, question,
@@ -1731,17 +1735,27 @@ def ask_uniai(question, state=None):
             active_source = supported if isinstance(supported, dict) else None
             return _save_reply(st, question, text, records=cited, active=active_source)
         if getattr(parsed, "requested_field", None) == "documents":
-            # No globally valid checklist exists for unspecified university
-            # processes. Ask the student to identify the actual notice.
-            options = "\n".join(
-                f"- {_record_heading(r)}\n  {_record_source(r)}"
-                for r in records[:3]
-            )
+            # Without a specified circular, comparing the *actual OCR* from
+            # each candidate is more helpful than listing titles only, but
+            # never combine their requirements into a universal checklist.
+            chosen = records[:3]
+            sections = []
+            for candidate in chosen:
+                title = _record_heading(candidate)
+                sections.append(
+                    f"{title}\n"
+                    + answer_document_question(
+                        candidate, title, _record_source(candidate),
+                        question=question,
+                    )
+                )
             return _save_reply(
                 st, question,
-                "Document requirements vary by notice, course and admission "
-                "round. Please identify which official circular you mean:\n"
-                + options, records=records[:3],
+                "Document requirements depend on the admission round/course. "
+                "Below is what each retrieved circular independently supports; "
+                "these are not a universal requirement list. Please specify "
+                "your notice for a definitive answer.\n\n"
+                + "\n\n".join(sections), records=chosen,
             )
 
     if _is_list_request(question, parsed) or is_pure_latest or issue_date is not None:
