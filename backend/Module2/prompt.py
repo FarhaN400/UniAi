@@ -21,7 +21,7 @@ You must ALWAYS return a JSON object with EXACTLY these fields, in this exact st
   "fees": {{
     "amount": "number or null",
     "currency": "string or null",
-    "type": "application | admission | registration | examination | tuition | processing | other | null"
+    "type": "application | admission | registration | examination | tuition | processing | counselling | other | null"
   }},
   "action_required": "what the reader needs to do, or null if purely informational",
   "key_points": ["short bullet points capturing the main rules/facts, as an array of strings"],
