@@ -29,17 +29,25 @@ _BOUNDARY = re.compile(r";+|(?<=[.!?])\s+(?=[A-Z])")
 def query_fee_kind(question):
     """Return a single explicitly requested category (or None for comparisons)."""
     query = str(question or "")
-    patterns = (
-        ("application", r"\bapplication[\s-]*fees?\b|\bfees?\s+for\s+(?:an?\s+)?application\b"),
-        ("admission", r"\badmission[\s-]*fees?\b|\bfees?\s+for\s+admission\b"),
+    # Direct labels take precedence over phrases such as "fee for admission".
+    # In "application fee for admission", the requested payment is application.
+    explicit = (
+        ("application", r"\bapplication[\s-]*fees?\b"),
+        ("admission", r"\badmission[\s-]*fees?\b"),
         ("registration", r"\bregistration[\s-]*fees?\b"),
         ("examination", r"\b(?:exam|examination)[\s-]*fees?\b"),
         ("tuition", r"\btuition[\s-]*fees?\b"),
         ("processing", r"\bprocessing[\s-]*fees?\b"),
         ("counselling", r"\b(?:counselling|counseling)[\s-]*fees?\b"),
     )
-    matches = [kind for kind, pattern in patterns if re.search(pattern, query, re.I)]
-    return matches[0] if len(matches) == 1 else None
+    matches = [kind for kind, pattern in explicit if re.search(pattern, query, re.I)]
+    if matches:
+        return matches[0] if len(matches) == 1 else None
+    if re.search(r"\bfees?\s+for\s+(?:an?\s+)?application\b", query, re.I):
+        return "application"
+    if re.search(r"\bfees?\s+for\s+admission\b", query, re.I):
+        return "admission"
+    return None
 
 def _sections(text):
     """Split clauses without crossing from one fee sentence into another."""
@@ -130,7 +138,6 @@ def answer_fee_question(question, record, source, title):
     Legacy/untyped extraction amounts only support generic fee responses.
     """
     sd = record.get("structured_data") or {}
-    lower = str(question or "").casefold()
     kind = query_fee_kind(question)
     fees = sd.get("fees") or {}
     if kind:
