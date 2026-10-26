@@ -18,7 +18,7 @@ class Fees(BaseModel):
     # Optional for compatibility with notices extracted before this field existed.
     type: Optional[Literal[
         "application", "admission", "registration", "examination",
-        "tuition", "processing", "other"
+        "tuition", "processing", "counselling", "other"
     ]] = None
 
     @field_validator("amount", mode="before")
