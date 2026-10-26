@@ -92,6 +92,7 @@ class FeeEvidenceTests(unittest.TestCase):
             ("What is the registration fee?", "registration"),
             ("How much is the exam fee?", "examination"),
             ("What is the fee in this notice?", None),
+            ("What is the application fee for admission?", "application"),
             ("Compare application fee and admission fee", None),
             ("What is the counselling fee?", "counselling"),
         ]
