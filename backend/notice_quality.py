@@ -23,16 +23,24 @@ def summary_warning(record):
     # Only flag an earlier event year for admissions/reporting. A notice may
     # legitimately mention its previous circular number or an older policy;
     # those references do not by themselves invalidate a summary.
-    dated_event = re.search(
-        r"\b(?:report(?:ing)?|admission)\s+(?:dates?|on|from|between|during)\b"
-        r"([\s\S]{0,220})", summary, re.I
+    # Require a concrete calendar date next to an earlier year. A historical
+    # circular reference in a summary is not by itself an invalid deadline.
+    # Includes PDF hyphens like '13‑15 Oct 2024' seen in live JELET output.
+    year_in_event_dates = [
+        int(y) for y in re.findall(
+            r"\b\d{1,2}(?:\s*[-–‑—]\s*\d{1,2})?\s+"
+            r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|"
+            r"May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|"
+            r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(20\d{2})\b",
+            summary, re.I,
+        )
+    ]
+    year_in_event_dates.extend(
+        int(y) for y in re.findall(
+            r"\b\d{1,2}[-/]\d{1,2}[-/](20\d{2})\b", summary
+        )
     )
-    # A lead-in can identify JELET-2025 before giving 'Oct 2024'.
-    # Examine every date year in the relevant reporting passage, not just
-    # the first mentioned year.
-    years = [int(y) for y in re.findall(r"(?<!\d)(20\d{2})(?!\d)",
-                                        dated_event.group(1))] if dated_event else []
-    if any(year < target_year for year in years):
+    if any(year < target_year for year in year_in_event_dates):
         return ("The extracted admission/reporting dates appear to precede "
                 "the entrance-exam year. Summary withheld until the official "
                 "PDF is reviewed.")
