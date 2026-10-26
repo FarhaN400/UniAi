@@ -1,0 +1,44 @@
+name: UniAI Live 50 Findings Regression Batch
+
+on:
+  pull_request:
+    paths:
+      - backend/retrieve.py
+      - backend/Module4/main.py
+      - backend/Module4/document_utils.py
+      - backend/notice_quality.py
+      - backend/tests/test_live_50_fixes.py
+      - .github/workflows/live_50_regressions.yml
+  push:
+    branches: [fix/live-evaluation-50-batch]
+
+jobs:
+  regression-batch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Check Python syntax
+        run: python -m py_compile backend/retrieve.py backend/Module4/main.py backend/Module4/document_utils.py backend/notice_quality.py
+      - name: Regression tests for live failures
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_live_50_fixes.py' -v
+      - name: Prior academic scope regression
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_academic_scope.py' -v
+      - name: Prior document evidence regression
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_document_evidence.py' -v
+      - name: Prior fee evidence regression
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_fee_evidence.py' -v
+      - name: Prior high priority regression
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_high_priority_batch.py' -v
