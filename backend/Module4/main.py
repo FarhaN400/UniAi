@@ -1144,7 +1144,8 @@ def _field_answer(question, record, field=None):
         # General fee questions may refer to any payment category. Prefer a
         # directly labelled excerpt over an ambiguously typed legacy amount.
         evidence = []
-        for fee_kind in ("application", "admission", "registration", "examination"):
+        for fee_kind in ("application", "admission", "registration", "examination",
+                         "tuition", "processing", "counselling"):
             for quote, _ in labeled_fee_evidence(record, fee_kind):
                 if quote not in evidence:
                     evidence.append(quote)
@@ -1159,7 +1160,7 @@ def _field_answer(question, record, field=None):
         if amount not in (None, "", "null", "None"):
             label = f"{fee_type.capitalize()} fee" if fee_type in (
                 "application", "admission", "registration", "examination",
-                "tuition", "processing", "other"
+                "tuition", "processing", "counselling", "other"
             ) else "Fee (category not verified)"
             return (f"{label} in the extracted record: "
                     f"{_plain(amount)} {_plain(currency)}. "
