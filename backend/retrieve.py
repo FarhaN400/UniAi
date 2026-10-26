@@ -214,6 +214,9 @@ def is_pure_time_query(question):
     ))
     if not has_time:
         return False
+    # A year or academic-session constraint means this is NOT global latest.
+    if extract_year_from_question(question) is not None:
+        return False
     if _explicit_topics(question):
         return False
     topic_indicators = (
@@ -306,6 +309,10 @@ def retrieve_time_based(question, top_k=3):
     now = datetime.now(INDIA_TZ)
     text = str(question or "").lower()
     year = extract_year_from_question(question)
+    if year is not None and not re.search(r"\b(?:today|yesterday)\b", text):
+        # "Latest notices for 2026-27" is a session identity constraint,
+        # not an issue-date=2026 filter.
+        return retrieve_filtered_notices(question, top_k=top_k, sort_latest=True)
     records = list(notices_collection.find({"status": "processed"}))
     if "today" in text or "today's" in text:
         target = now.date()
@@ -536,8 +543,12 @@ def retrieve_context(question, top_k=3):
     if is_pure_time_query(question):
         return retrieve_time_based(question, top_k)
     if (detect_search_topics(question) or _requested_issue_date_any_position(question)
-            or academic_sessions(question)):
-        return retrieve_filtered_notices(question, top_k)
+            or extract_year_from_question(question) is not None):
+        return retrieve_filtered_notices(
+            question, top_k,
+            sort_latest=bool(re.search(r"\b(?:latest|recent|most\s+recent)\b",
+                                       str(question or ""), re.I)),
+        )
     return retrieve_semantic(question, top_k)
 
 
