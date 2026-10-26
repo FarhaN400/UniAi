@@ -46,6 +46,7 @@ from Module4.evidence import (
 )
 
 from Module4.fee_utils import answer_fee_question
+from Module4.document_utils import answer_document_question
 
 
 MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
@@ -1126,9 +1127,10 @@ def _field_answer(question, record, field=None):
         return f"I could not verify a deadline from this notice's extracted details.\n{source}"
     if field == "fees" or re.search(r"\b(?:application\s+fee|fees?|charges?)\b", lower):
         return answer_fee_question(question, record, source, title)
-    if field in ("documents", "eligibility", "procedure", "location", "time", "contact"):
+    if field == "documents":
+        return answer_document_question(record, title, source)
+    if field in ("eligibility", "procedure", "location", "time", "contact"):
         expressions = {
-            "documents": r"\b(?:documents?|certificate|photocopies?|originals?|aadhaar|marksheets?|proof|verification)\b",
             "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2)\b",
             "procedure": r"\b(?:apply|application|registration|submit|submission|portal|steps?|report(?:ing)?|procedure|process)\b",
             "location": r"\b(?:campus|building|venue|room|location|reporting\s+(?:at|venue)|salt\s+lake|haringhata)\b",
