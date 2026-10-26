@@ -1233,18 +1233,15 @@ def _safe_grounded_answer(question, records, st, *, preserve=False):
             question, records, active_notice=records[0] if len(records) == 1 else None,
             current_state=st,
         )
-        if answer == NO_RESULTS_MESSAGE:
-            answer = (_structured_notice_overview(records[0]) if len(records) == 1 else
-                      format_notice_list(records))
-            _save_reply(st, question, answer, records=records,
-                        active=records[0] if len(records) == 1 else None,
-                        preserve=preserve)
+        # answer_from_records has already recorded a no-evidence response
+        # with records=[], so don't append another answer or attach a PDF
+        # that didn't support the requested fact.
     except Exception:
-        logging.exception("[UniAI] Grounded answer model failed; using extracted notice facts")
-        answer = (_structured_notice_overview(records[0]) if len(records) == 1 else
-                  format_notice_list(records))
-        _save_reply(st, question, answer, records=records,
-                    active=records[0] if len(records) == 1 else None,
+        logging.exception("[UniAI] Grounded answer model temporarily unavailable")
+        answer = ("I couldn't verify an answer because the answer service is "
+                  "temporarily unavailable. Please retry. I won't substitute "
+                  "a general notice summary for the requested information.")
+        _save_reply(st, question, answer, records=[],
                     preserve=preserve)
     if preserve and original_list:
         st.set_last_results(original_list)
