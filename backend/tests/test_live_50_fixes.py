@@ -149,6 +149,19 @@ class LiveGroundingRegressions(unittest.TestCase):
             "Give eligibility criteria for JELET 2025",docs,parsed)
         self.assertEqual(answer,"Supported field answer")
 
+    def test_q43_no_guaranteed_salary_without_verified_amount(self):
+        ns = main_functions("_field_answer")
+        ns["missing_amount_guidance"] = (
+            lambda q, r: "No verified guaranteed placement amount."
+        )
+        record = notice("wbjee", "WBJEEB-2026 Admission Reporting")
+        answer = ns["_field_answer"](
+            "What is the guaranteed placement salary in the WBJEEB 2026 notice?",
+            record,
+        )
+        self.assertIn("No verified guaranteed placement amount.", answer)
+        self.assertIn(record["url"], answer)
+
     def test_q17_ambiguous_jelet_dates_are_disambiguated(self):
         ns=main_functions("_preferred_evidence_record","_direct_fact_answer")
         docs=[notice("one","JELET-2025 Phase One"),
@@ -157,6 +170,9 @@ class LiveGroundingRegressions(unittest.TestCase):
         answer,target=ns["_direct_fact_answer"](
             "What is the official issue date of the JELET 2025 notice?",docs,parsed)
         self.assertIn("multiple JELET notices",answer)
+        self.assertIn("https://makautwb.ac.in/one.pdf", answer)
+        self.assertIn("https://makautwb.ac.in/two.pdf", answer)
+        self.assertEqual(len(target), 2)
 
 if __name__ == "__main__":
     unittest.main()
