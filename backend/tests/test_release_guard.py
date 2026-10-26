@@ -97,6 +97,9 @@ class ReleaseGuardTests(unittest.TestCase):
         tree = ast.parse(path.read_text(encoding="utf8"))
         method = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
                       and n.name == "health")
+        # The isolated unit test supplies a fake registry, not a real
+        # FastAPI instance; registration is tested by the application itself.
+        method.decorator_list = []
         from contextlib import nullcontext
         import time
         ns = {"os": os, "time": time, "_registry_lock": nullcontext(),
