@@ -1160,7 +1160,47 @@ def _field_answer(question, record, field=None):
         return answer_fee_question(question, record, source, title)
     if field == "documents":
         return answer_document_question(record, title, source, question=question)
-    if field in ("eligibility", "procedure", "location", "time", "contact"):
+    if field == "eligibility":
+        # "eligible candidates should complete registration" is NOT an
+        # eligibility criterion. Require a condition, qualification, category
+        # rule or minimum threshold in the same extracted statement.
+        eligibility_signal = re.compile(
+            r"\b(?:must\s+(?:have|possess|pass)|passed|"
+            r"minimum|at\s+least|qualification|diploma|degree|"
+            r"10\+2|12th|graduate|percentage|"
+            r"subject\s+combination|reserved\s+categor|"
+            r"sc/st|obc|ews|non.creamy|pwd|"
+            r"eligib(?:ility|le)\s+(?:if|only|when|criteria|requirements?))\b",
+            re.I,
+        )
+        candidates = [
+            _plain(v) for v in [sd.get("action_required"),
+                                *(sd.get("key_points") or [])]
+            if v and eligibility_signal.search(_plain(v))
+        ]
+        # The existence of a caste-document checklist alone does not prove
+        # a category-based admission eligibility rule.
+        if re.search(r"\b(?:reserved.category|reservation)\b", lower):
+            explicit_criteria = [v for v in candidates if re.search(
+                r"\b(?:eligib|criteria|minimum|admissi(?:on|ble)|quota|"
+                r"reserved\s+seats?)\b", v, re.I
+            ) and not re.search(r"\b(?:carry|bring|certificate|photocop|"
+                                r"original\s+document)\b", v, re.I)]
+            if not explicit_criteria:
+                return (f"I found category-certificate/document-verification "
+                        f"instructions in '{title}', but cannot confirm "
+                        f"separate reserved-category eligibility criteria from "
+                        f"the extracted notice. Consult the original PDF.\n{source}")
+            candidates = explicit_criteria
+        if not candidates:
+            return (f"I couldn't verify specific eligibility criteria from "
+                    f"the extracted details of '{title}'. Statements that "
+                    f"'eligible candidates may register' do not establish "
+                    f"who qualifies. Check the official PDF.\n{source}")
+        return (f"Eligibility evidence extracted from '{title}':\n"
+                + "\n".join(f"- {value[:700]}" for value in candidates[:7])
+                + f"\nPlease verify conditions in the official notice.\n{source}")
+    if field in ("procedure", "location", "time", "contact"):
         expressions = {
             "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2|caste|category|reserved|sc|st|obc|ews|pwd|reservation)\b",
             "procedure": r"\b(?:apply|application|registration|submit|submission|portal|steps?|report(?:ing)?|procedure|process)\b",
