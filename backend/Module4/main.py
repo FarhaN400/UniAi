@@ -1355,12 +1355,14 @@ def _direct_fact_answer(question, records, parsed):
             r"\bjelet\b.*\b20\d{2}\b", q
         ) and not re.search(r"\b(?:round|phase|dated)\b", q):
             choices = "\n".join(
-                f"- {_record_heading(item)} ({(item.get('structured_data') or {}).get('issue_date') or 'date unverified'})"
+                f"- {_record_heading(item)} "
+                f"({(item.get('structured_data') or {}).get('issue_date') or 'date unverified'})\n"
+                f"  {_record_source(item)}"
                 for item in records[:4]
             )
             return (f"There are multiple JELET notices for this year. "
-                    f"Which notice's issue date do you mean?\n{choices}\n"
-                    f"{_record_source(target)}", target)
+                    f"Which notice's issue date do you mean?\n{choices}",
+                    records[:4])
 
         answer = _field_answer(question, target, field)
         if answer is not None:
@@ -1640,8 +1642,10 @@ def ask_uniai(question, state=None):
             and issue_date is None):
         direct = _direct_fact_answer(question, records, parsed)
         if direct is not None:
-            text, record = direct
-            return _save_reply(st, question, text, records=[record], active=record)
+            text, supported = direct
+            cited = supported if isinstance(supported, list) else [supported]
+            active_source = supported if isinstance(supported, dict) else None
+            return _save_reply(st, question, text, records=cited, active=active_source)
         if getattr(parsed, "requested_field", None) == "documents":
             # No globally valid checklist exists for unspecified university
             # processes. Ask the student to identify the actual notice.
