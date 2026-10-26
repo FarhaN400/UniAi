@@ -167,8 +167,14 @@ def _process_chat(request, cid, state):
     if request.request_id:
         replay = state.recent_requests.get(request.request_id)
         if replay is not None:
-            # The same client request was committed before a lost response.
-            return {**replay, "conversation_id": cid}
+            # A repeated request ID must refer to exactly the same question,
+            # never return a cached response from a different user request.
+            if replay.get("question") != request.question:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Request ID was already used for a different question.",
+                )
+            return {**replay["response"], "conversation_id": cid}
 
     previous_turn = state.get_last_turn()
     answer = ask_uniai(request.question, state=state)
@@ -184,7 +190,10 @@ def _process_chat(request, cid, state):
         "conversation_id": cid,
     }
     if request.request_id:
-        state.recent_requests[request.request_id] = dict(response)
+        state.recent_requests[request.request_id] = {
+            "question": request.question,
+            "response": dict(response),
+        }
         # A small bounded cache prevents unbounded state growth.
         while len(state.recent_requests) > 15:
             del state.recent_requests[next(iter(state.recent_requests))]
