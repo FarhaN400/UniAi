@@ -779,6 +779,13 @@ def _question_scope_matches(question, record):
         sd.get("summary"), sd.get("action_required"),
     )).casefold()
     text = primary + " " + secondary
+    # JELET-2025 issue-date and eligibility questions must identify a
+    # JELET-specific circular, not the issue date of an unrelated generic
+    # lateral-registration notice that lists JELET among its audiences.
+    if re.search(r"\bjelet\b", q) and re.search(
+        r"\b(?:issue\s+date|date\s+of\s+issue|issued|eligib|criteria)\w*\b", q
+    ) and not re.search(r"\bjelet\b", primary):
+        return False
     # A request for student-registration notices is NOT a search for any
     # document that happens to say "registering students" in its summary.
     # First require that student registration is the actual notice subject.
