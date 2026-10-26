@@ -74,6 +74,36 @@ def _lines(text):
             yield line
 
 
+def _join_wrapped_lines(raw_text):
+    """Join OCR's hard-wrapped checklist entries before extracting named documents.
+
+    PDF extraction frequently splits "original Mark sheet of Class 10" from
+    "and 12, Admit Card, Rank Card, ..." on the next physical line.
+    Keep headings/numbered entries/sentences separate; cap groups to avoid
+    accidentally copying other sections of a long PDF.
+    """
+    grouped, current = [], ""
+    for raw_line in str(raw_text or "")[:180000].splitlines():
+        line = " ".join(raw_line.split())
+        if not line:
+            if current:
+                grouped.append(current)
+                current = ""
+            continue
+        starts_new = bool(_ENUMERATED.match(line) or _LIST_HEADING.search(line))
+        ended = bool(re.search(r"[.!?:]\s*$", current))
+        if (current and not starts_new and not ended
+                and len(current) + len(line) < 1400):
+            current += " " + line
+        else:
+            if current:
+                grouped.append(current)
+            current = line
+    if current:
+        grouped.append(current)
+    return grouped
+
+
 def _clauses(line):
     """Break distinct instructions apart; never combine prohibited and required."""
     # Semicolons and a completed sentence are safe boundaries. Avoid splitting
@@ -86,7 +116,7 @@ def _clauses(line):
 
 def _extract_named_lines(raw_text):
     """Extract original OCR passages actually naming required documents."""
-    lines = list(_lines(str(raw_text or "")[:180000]))
+    lines = _join_wrapped_lines(raw_text)
     found, notes, seen, notes_seen = [], [], set(), set()
     scope_until = -1
     last_list_entry = -1
@@ -116,7 +146,7 @@ def _extract_named_lines(raw_text):
                 key = re.sub(r"\W+", " ", part).strip().casefold()
                 if key and key not in seen:
                     seen.add(key)
-                    found.append(part[:550])
+                    found.append(part[:1200])
             elif (in_document_list and _COPY_INSTRUCTIONS.search(part)
                   and _REQUIREMENT.search(part)):
                 key = re.sub(r"\W+", " ", part).strip().casefold()
