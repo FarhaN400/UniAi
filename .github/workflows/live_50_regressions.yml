@@ -9,6 +9,9 @@ on:
       - backend/notice_quality.py
       - backend/tests/test_live_50_fixes.py
       - backend/tests/test_final_live_batch.py
+      - backend/tests/test_release_guard.py
+      - backend/app.py
+      - backend/evaluation/run_50.py
       - backend/Module4/query_understanding.py
       - .github/workflows/live_50_regressions.yml
   push:
@@ -23,7 +26,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Check Python syntax
-        run: python -m py_compile backend/retrieve.py backend/Module4/main.py backend/Module4/document_utils.py backend/notice_quality.py
+        run: python -m py_compile backend/retrieve.py backend/Module4/main.py backend/Module4/document_utils.py backend/notice_quality.py backend/app.py backend/evaluation/run_50.py
+      - name: Final release verification and citation regressions
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_release_guard.py' -v
       - name: Final 50-question bug-batch regressions
         env:
           PYTHONPATH: backend

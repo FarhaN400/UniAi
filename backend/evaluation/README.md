@@ -17,11 +17,46 @@ missing information (4), and out-of-scope requests (4).
 - `results_50.csv`: produced locally when you run the command (not stored
   in GitHub).
 
-## Run AFTER PR #6 is merged and the backend is deployed
+## Verify the Render revision before evaluating
+
+The Render **/health** endpoint reports the public source commit in `revision`
+(from Render's built-in `RENDER_GIT_COMMIT`). This prevents an old deployment
+from masquerading as a failed fix. Merge the patch, update your working copy,
+then confirm the running backend revision before making any billable requests.
+
+```bash
+/usr/bin/git pull --ff-only origin main
+REV=$(/usr/bin/git rev-parse --short=12 HEAD)
+curl -fsS https://uniai-backend-1isk.onrender.com/health
+```
+
+The `revision` field must begin with `$REV`. If it does not, inspect
+the active commit under **Render > your backend > Deploys**. A 200 health
+response alone does not verify which GitHub commit was deployed.
+
+First run only the four previously incorrect-source questions:
+
+```bash
+python3 backend/evaluation/run_50.py \
+  --base-url https://uniai-backend-1isk.onrender.com \
+  --expect-revision "$REV" \
+  --only Q03 Q17 Q23 Q24 \
+  --run-live \
+  --out backend/evaluation/results_4_release_smoke.csv
+```
+
+Inspect the CSV for unrelated notice sources. Specifically: Q03 must not
+cite anti-ragging/refund notices, Q17/Q24 must not cite generic lateral
+registration as a JELET-specific notice, and Q23 must not cite a hostel
+allotment notice. Incomplete results must clearly report what is unknown
+rather than inventing requirements.
+
+## Run the full evaluation AFTER deployment verification
 
 ```bash
 python backend/evaluation/run_50.py \
   --base-url https://YOUR-DEPLOYED-FASTAPI-HOST \
+  --expect-revision "$REV" \
   --run-live \
   --out backend/evaluation/results_50.csv
 ```
@@ -46,6 +81,7 @@ A missing or discontinued real notice is not grounds for manufacturing an
 expected answer. A safe "no matching processed notice" answer may be
 correct if the exact source is not present.
 
-The test set is ready, but **live 50-question execution has not been
-performed** as part of this PR, because a reachable deployed API and the
-actual notices must be verified after merging.
+CI runs synthetic unit tests without network/model quota. The full live
+evaluation must be initiated intentionally after deployment, then reviewed
+against the original university PDFs. A 50/50 HTTP success rate does not
+establish factual accuracy.

@@ -205,7 +205,13 @@ def health():
     with _registry_lock:
         _cleanup_sessions(time.monotonic())
         count = len(session_store)
-    return {"status": "ok", "service": "UniAI Backend", "active_sessions": count}
+    # Render sets RENDER_GIT_COMMIT automatically; publish only the public
+    # source revision. This lets evaluations detect an outdated/mixed deploy.
+    # Do not expose instance IDs, database credentials, or private env values.
+    revision = os.getenv("RENDER_GIT_COMMIT") or os.getenv("UNIAI_BUILD_SHA") or "unknown"
+    revision = revision.strip() if revision.strip() else "unknown"
+    return {"status": "ok", "service": "UniAI Backend",
+            "active_sessions": count, "revision": revision[:40]}
 
 
 @app.post("/api/chat")

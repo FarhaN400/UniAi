@@ -779,6 +779,13 @@ def _question_scope_matches(question, record):
         sd.get("summary"), sd.get("action_required"),
     )).casefold()
     text = primary + " " + secondary
+    # JELET-2025 issue-date and eligibility questions must identify a
+    # JELET-specific circular, not the issue date of an unrelated generic
+    # lateral-registration notice that lists JELET among its audiences.
+    if re.search(r"\bjelet\b", q) and re.search(
+        r"\b(?:issue\s+date|date\s+of\s+issue|issued|eligib|criteria)\w*\b", q
+    ) and not re.search(r"\bjelet\b", primary):
+        return False
     # A request for student-registration notices is NOT a search for any
     # document that happens to say "registering students" in its summary.
     # First require that student registration is the actual notice subject.
@@ -800,9 +807,13 @@ def _question_scope_matches(question, record):
     if re.search(r"\bholidays?\b", q):
         if not re.search(r"\b(?:holidays?|puja|vacation|hostel\s+clos(?:ure|ed)|campus\s+clos(?:ure|ed))\b", primary):
             return False
-    # Generic "2026 admission notice" should not silently choose a fee
-    # refund/withdrawal notice or an unrelated admissions administration item.
-    if re.search(r"\b(?:admission\s+notice|admission\s+notices)\b", q):
+    # A generic admission *notice* is about admissions, not hostel seats or
+    # a refund circular. Fee questions for a named hostel notice are unaffected.
+    if re.search(r"\b(?:admission\s+notices?|admissions?\s+circular)\b", q):
+        if not re.search(r"\badmissions?\b", primary):
+            return False
+        if re.search(r"\b(?:hostels?|accommodat|ragging)\b", primary):
+            return False
         if re.search(r"\b(?:refund|withdrawal|cancellation)\b", primary) and not re.search(
             r"\b(?:refund|withdrawal|cancellation)\b", q
         ):
@@ -876,6 +887,27 @@ def _question_scope_matches(question, record):
         if re.search(r"\bappointment\s+of\b.*\b(?:placement|training)\b.*\bofficer\b", primary):
             return False
     return True
+
+
+def enforce_source_scope(question, records):
+    """Final safeguard: a source-bearing answer must satisfy explicit topic
+    and subject constraints even if another retrieval entry point is used.
+
+    This catches regressions where Pinecone results or a different router
+    bypass strict Mongo filtering. Never replace excluded documents with
+    loosely related PDFs: missing verified matches is safer.
+    """
+    topics = detect_search_topics(question)
+    kept = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if topics and not _search_topic_matches(record, topics):
+            continue
+        if not _question_scope_matches(question, record):
+            continue
+        kept.append(record)
+    return kept
 
 
 def _year_scope_matches(record, year):

@@ -47,8 +47,37 @@ def valid_sources(sources):
     return True
 
 
-def execute(base_url, output_path, timeout_seconds=135, delay_seconds=0.5):
+def verify_revision(base_url, expected_sha):
+    """Fail BEFORE making billable LLM requests if Render deploy is stale."""
+    expected_sha = str(expected_sha or "").lower().strip()
+    if not (7 <= len(expected_sha) <= 40 and
+            all(c in "0123456789abcdef" for c in expected_sha)):
+        raise ValueError("Expected git commit must be a 7-40 character SHA")
+    endpoint = base_url.rstrip("/") + "/health"
+    try:
+        with request.urlopen(endpoint, timeout=45) as resp:
+            payload = json.load(resp)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Could not verify deployed revision at {endpoint}: {exc}") from exc
+    actual = str(payload.get("revision") or "").lower().strip()
+    if not actual.startswith(expected_sha):
+        raise RuntimeError(
+            f"Wrong Render version: /health revision is {actual!r}, "
+            f"expected prefix {expected_sha!r}. Check Render Deploys and "
+            "wait for the intended commit to be live before evaluation."
+        )
+    print(f"Deployment verified: {actual}", flush=True)
+
+
+def execute(base_url, output_path, timeout_seconds=135, delay_seconds=0.5, only_ids=None):
     questions = load_questions()
+    if only_ids:
+        wanted = set(only_ids)
+        actual_ids = {q["id"] for q in questions}
+        unknown = sorted(wanted - actual_ids)
+        if unknown:
+            raise ValueError(f"Unknown question IDs: {', '.join(unknown)}")
+        questions = [q for q in questions if q["id"] in wanted]
     base = base_url.rstrip("/")
     if not base.startswith("https://") and not base.startswith("http://localhost"):
         raise ValueError("Use an HTTPS backend URL (or localhost for development)")
@@ -109,11 +138,17 @@ def main():
     parser.add_argument("--base-url", help="Deployed FastAPI root URL")
     parser.add_argument("--out", default="backend/evaluation/results_50.csv")
     parser.add_argument("--run-live", action="store_true",
-                        help="Explicitly confirm 50 real backend requests")
+                        help="Explicitly confirm real backend requests")
+    parser.add_argument("--expect-revision",
+                        help="Require deployed /health revision to match this git SHA prefix before requests")
+    parser.add_argument("--only", nargs="+", metavar="ID",
+                        help="Only run selected IDs, e.g. --only Q03 Q17 Q23 Q24")
     args = parser.parse_args()
     if not args.run_live or not args.base_url:
         parser.error("No live requests made. Set --base-url and --run-live to execute.")
-    execute(args.base_url, Path(args.out))
+    if args.expect_revision:
+        verify_revision(args.base_url, args.expect_revision)
+    execute(args.base_url, Path(args.out), only_ids=args.only)
 
 
 if __name__ == "__main__":
