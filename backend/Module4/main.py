@@ -1467,6 +1467,17 @@ def _compare_hostel_and_holiday(question, st):
                        records=found, active=None)
 
 
+def _is_comparison_query(question):
+    """Comparison can be expressed as 'How do A and B differ?', not just
+    'Compare A with B'. Avoid conflating a singular 'different notice'.
+    """
+    lower = str(question or "").casefold()
+    return bool(re.search(
+        r"\b(?:compare|comparison|differ|differences?|versus|vs\.?)\b",
+        lower,
+    ))
+
+
 def _comparison_notice_answer(question, st):
     """Compare distinct years without allowing the first year to filter both."""
     from retrieve import retrieve_filtered_notices
@@ -1661,7 +1672,7 @@ def ask_uniai(question, state=None):
             return _safe_grounded_answer(question, earlier, st, preserve=True)
         return _save_reply(st, question, "Please choose two notices to compare first.")
 
-    if re.search(r"\b(?:compare|comparison|differ|differences?|versus)\b", question, re.I):
+    if _is_comparison_query(question):
         try:
             compared = _compare_hostel_and_holiday(question, st)
             if compared is not None:
