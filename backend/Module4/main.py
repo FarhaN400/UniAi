@@ -1098,6 +1098,14 @@ def _field_answer(question, record, field=None):
     lower = str(question or "").casefold()
     source = _record_source(record)
     title = _record_heading(record)
+    # A placement-salary question is a requested fact within the named
+    # admission notice, not evidence of a separate recruitment notice.
+    if re.search(r"\bguaranteed\b", lower) and re.search(
+        r"\b(?:placement|salary|package|ctc)\b", lower
+    ):
+        guidance = missing_amount_guidance(question, record)
+        if guidance:
+            return f"{guidance}\n{source}"
     # A request for reopening is NOT a request to list more hostel notices.
     # Closure-end dates do not establish an official reopening date by themselves.
     if re.search(r"\breopen(?:s|ed|ing)?\b", lower):
@@ -1316,6 +1324,10 @@ def _direct_fact_answer(question, records, parsed):
         field = "documents"
     if not field and re.search(r"\b(?:eligible|eligibility)\b", q):
         field = "eligibility"
+    if not field and re.search(r"\bguaranteed\b", q) and re.search(
+        r"\b(?:placement|salary|package|ctc)\b", q
+    ):
+        field = "placement_amount"
     target = _preferred_evidence_record(question, records)
 
     # A single identified notice can answer an academic-session identity
@@ -1328,7 +1340,8 @@ def _direct_fact_answer(question, records, parsed):
                     f"{m.group(1)}-{m.group(2)}.\n{_record_source(target)}", target)
 
     if field in ("documents", "fees", "deadline", "eligibility", "procedure",
-                 "issue_date", "reference_number", "location", "time", "contact", "source"):
+                 "issue_date", "reference_number", "location", "time", "contact",
+                 "placement_amount", "source"):
         # Unscoped checklist queries may refer to several different notices.
         # Returning one institution-wide checklist would be misleading.
         if (len(records) > 1 and field == "documents" and not re.search(
