@@ -204,7 +204,8 @@ def merge_chunk_results(results):
         },
         "fees": {
             "amount": None,
-            "currency": None
+            "currency": None,
+            "type": None
         },
         "action_required": None,
         "key_points": [],
@@ -320,7 +321,8 @@ def merge_chunk_results(results):
         if fee and fee.get("amount") is not None:
             value = (
                 str(fee["amount"]),
-                fee.get("currency")
+                fee.get("currency"),
+                fee.get("type"),
             )
 
             if value not in fee_values:
@@ -329,17 +331,18 @@ def merge_chunk_results(results):
     if len(fee_values) == 1:
         merged["fees"] = {
             "amount": fee_values[0][0],
-            "currency": fee_values[0][1]
+            "currency": fee_values[0][1],
+            "type": fee_values[0][2],
         }
 
     elif len(fee_values) > 1:
-        add_point(
-            "Multiple monetary values require verification: "
-            + "; ".join(
-                f"{amount} {currency or ''}"
-                for amount, currency in fee_values
+        # Two different fee categories must not collapse into a generic one.
+        # Keep each as a provisional point for review, not a verified amount.
+        for amount, currency, fee_type in fee_values:
+            add_point(
+                f"Extracted {fee_type or 'unclassified'} fee candidate "
+                f"requiring verification: {amount} {currency or ''}".strip()
             )
-        )
 
     # Build a summary from chunk summaries.
     # This is a provisional long-document summary.

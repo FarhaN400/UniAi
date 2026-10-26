@@ -572,7 +572,9 @@ def build_context_string(records, question=None):
         if date_info:
             block.append("Important Dates: " + " | ".join(date_info))
         if fees.get("amount") is not None:
-            block.append(f"Fee: {fees['amount']} {fees.get('currency') or ''}".strip())
+            fee_type = fees.get("type")
+            label = f"{fee_type.capitalize()} fee" if fee_type else "Fee (unspecified type)"
+            block.append(f"{label}: {fees['amount']} {fees.get('currency') or ''}".strip())
         if action:
             block.append(f"Action Required: {action}")
         if points:

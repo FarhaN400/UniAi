@@ -103,8 +103,10 @@ def build_retrieval_text(notice):
         amount = fees["amount"]
         currency = fees.get("currency") or ""
 
+        fee_type = fees.get("type")
+        label = f"{fee_type.capitalize()} fee" if fee_type else "Fee (unspecified type)"
         parts.append(
-            f"Fee: {amount} {currency}".strip()
+            f"{label}: {amount} {currency}".strip()
         )
 
     # Remove empty values

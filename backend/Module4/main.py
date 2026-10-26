@@ -45,6 +45,8 @@ from Module4.evidence import (
     missing_amount_guidance,
 )
 
+from Module4.fee_utils import answer_fee_question
+
 
 MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 NO_RESULTS_MESSAGE = (
@@ -1123,32 +1125,7 @@ def _field_answer(question, record, field=None):
                     f"Check the PDF to confirm which action it applies to.\n{source}")
         return f"I could not verify a deadline from this notice's extracted details.\n{source}"
     if field == "fees" or re.search(r"\b(?:application\s+fee|fees?|charges?)\b", lower):
-        fees = sd.get("fees") or {}
-        amount = fees.get("amount") if isinstance(fees, dict) else None
-        currency = fees.get("currency") if isinstance(fees, dict) else None
-        application_specific = "application" in lower
-        if application_specific:
-            # The schema's generic fees.amount is not necessarily an application
-            # fee. Extract an explicitly labeled amount from the official OCR
-            # or structured text; never convert an admission fee into one.
-            texts = [str(sd.get("action_required") or "")]
-            texts.extend(str(item) for item in (sd.get("key_points") or []))
-            texts.append(str(record.get("raw_text") or "")[:20000])
-            money = r"(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:rupees|INR)"
-            for evidence_line in texts:
-                match = re.search(
-                    rf"\bapplication\s+fees?\b.{{0,90}}?(?:{money})|"
-                    rf"(?:{money}).{{0,70}}?\bapplication\s+fees?\b",
-                    evidence_line, re.I | re.S,
-                )
-                if match:
-                    fragment = " ".join(match.group(0).split())
-                    return f"The official notice states: {fragment}.\n{source}"
-            return ("I cannot confirm an application-fee amount from the available "
-                    f"extracted details of '{title}'. Consult the official PDF.\n{source}")
-        if amount not in (None, "", "null", "None"):
-            return f"Fee listed in this notice: {_plain(amount)} {_plain(currency)}.\n{source}"
-        return f"I cannot verify a fee amount from the extracted notice details.\n{source}"
+        return answer_fee_question(question, record, source, title)
     if field in ("documents", "eligibility", "procedure", "location", "time", "contact"):
         expressions = {
             "documents": r"\b(?:documents?|certificate|photocopies?|originals?|aadhaar|marksheets?|proof|verification)\b",

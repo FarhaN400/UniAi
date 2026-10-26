@@ -20,7 +20,8 @@ You must ALWAYS return a JSON object with EXACTLY these fields, in this exact st
   }},
   "fees": {{
     "amount": "number or null",
-    "currency": "string or null"
+    "currency": "string or null",
+    "type": "application | admission | registration | examination | tuition | processing | counselling | other | null"
   }},
   "action_required": "what the reader needs to do, or null if purely informational",
   "key_points": ["short bullet points capturing the main rules/facts, as an array of strings"],
@@ -40,7 +41,8 @@ Rules:
 notices belong to Admission, not Discipline.
 - Set important_dates.start_date and last_date only when the notice explicitly establishes an action window, event period, or deadline. Publication dates, refund cutoff dates, and notice issue dates must not automatically become start_date or last_date. Preserve their exact meaning in key_points.
 - The fees object represents fees payable by applicants or students, not refund amounts, deductions, penalties, or deposits being returned. Record these other monetary amounts with their exact purpose in key_points.
-- Even when fee information is absent, "fees" MUST remain a JSON object with "amount": null and "currency": null.Never return "fees": null. Likewise, "important_dates" must always contain both "start_date" and "last_date", even if both values are null.
+- Set fees.type ONLY when the notice explicitly identifies which kind of fee the amount represents (e.g. application fee versus admission fee). If it just says 'fee' without a category, type must be null. Never infer application fees from an admission-fee amount or from an admission-fee information URL. If multiple distinct fee types or amounts appear, do not assign one arbitrary fee to the fees object: set amount/currency/type to null, and preserve each clearly labelled payment and its amount separately in key_points.
+- Even when fee information is absent, "fees" MUST remain a JSON object with "amount": null, "currency": null, and "type": null when not present. Never return "fees": null. Likewise, "important_dates" must always contain both "start_date" and "last_date", even if both values are null.
 
 NOTICE TEXT:
 {text}
