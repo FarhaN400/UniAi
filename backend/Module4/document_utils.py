@@ -74,6 +74,36 @@ def _lines(text):
             yield line
 
 
+def _join_wrapped_lines(raw_text):
+    """Join OCR's hard-wrapped checklist entries before extracting named documents.
+
+    PDF extraction frequently splits "original Mark sheet of Class 10" from
+    "and 12, Admit Card, Rank Card, ..." on the next physical line.
+    Keep headings/numbered entries/sentences separate; cap groups to avoid
+    accidentally copying other sections of a long PDF.
+    """
+    grouped, current = [], ""
+    for raw_line in str(raw_text or "")[:180000].splitlines():
+        line = " ".join(raw_line.split())
+        if not line:
+            if current:
+                grouped.append(current)
+                current = ""
+            continue
+        starts_new = bool(_ENUMERATED.match(line) or _LIST_HEADING.search(line))
+        ended = bool(re.search(r"[.!?:]\s*$", current))
+        if (current and not starts_new and not ended
+                and len(current) + len(line) < 1400):
+            current += " " + line
+        else:
+            if current:
+                grouped.append(current)
+            current = line
+    if current:
+        grouped.append(current)
+    return grouped
+
+
 def _clauses(line):
     """Break distinct instructions apart; never combine prohibited and required."""
     # Semicolons and a completed sentence are safe boundaries. Avoid splitting
@@ -86,7 +116,7 @@ def _clauses(line):
 
 def _extract_named_lines(raw_text):
     """Extract original OCR passages actually naming required documents."""
-    lines = list(_lines(str(raw_text or "")[:180000]))
+    lines = _join_wrapped_lines(raw_text)
     found, notes, seen, notes_seen = [], [], set(), set()
     scope_until = -1
     last_list_entry = -1
@@ -116,7 +146,7 @@ def _extract_named_lines(raw_text):
                 key = re.sub(r"\W+", " ", part).strip().casefold()
                 if key and key not in seen:
                     seen.add(key)
-                    found.append(part[:550])
+                    found.append(part[:1200])
             elif (in_document_list and _COPY_INSTRUCTIONS.search(part)
                   and _REQUIREMENT.search(part)):
                 key = re.sub(r"\W+", " ", part).strip().casefold()
@@ -161,7 +191,7 @@ def _structured_document_fallback(sd):
     return found[:25]
 
 
-def answer_document_question(record, title, source):
+def answer_document_question(record, title, source, question=None):
     """Return a grounded, source-linked list, or an explicit uncertainty answer.
 
     Prefer source PDF OCR, including names absent from old structured JSON.
@@ -173,9 +203,29 @@ def answer_document_question(record, title, source):
     if raw.strip():
         documents, instructions = _extract_named_lines(raw)
         if documents:
+            # When the student asks about ONE named document, show its exact
+            # excerpt and qualifiers rather than burying it in a large list.
+            # Avoid a universal yes/no answer across different admission rounds.
+            q = str(question or "").casefold()
+            sought = None
+            if re.search(r"\bdomicile\b", q):
+                sought = r"\b(?:domicile|residen(?:ce|tial))\b"
+            elif re.search(r"\b(?:self[- ]?attested|photocop(?:y|ies)|xerox)\b", q):
+                sought = r"\b(?:self[- ]?attested|photocop(?:y|ies)|xerox)\b"
+            elif re.search(r"\b(?:class\s*10|class\s*12|marksheets?|mark\s*sheets?)\b", q):
+                sought = r"\b(?:mark[\s-]*sheets?|class\s*10|class\s*12)\b"
+            selected = documents
+            if sought:
+                matches = [item for item in [*documents, *instructions]
+                           if re.search(sought, item, re.I)]
+                if not matches:
+                    return (f"I couldn't verify that specific document "
+                            f"requirement from the available extracted text of "
+                            f"'{title}'. Please check the original notice.\n{source}")
+                selected = list(dict.fromkeys(matches))[:8]
             output = [
                 f"Document requirements found in the extracted PDF text for '{title}':",
-                *(f"- {item}" for item in documents),
+                *(f"- {item}" for item in selected),
             ]
             if instructions:
                 output.append("Additional instructions from the same PDF:")

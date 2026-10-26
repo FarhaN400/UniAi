@@ -650,6 +650,11 @@ def detect_search_topics(question):
     # Hostel closure during Durga Puja: holiday is context, hostel is subject.
     if "hostel" in found:
         found.discard("holiday")
+    # In 'guaranteed placement salary in the WBJEE notice', placement
+    # describes the requested fact, not a second notice topic.
+    if (found & set(ADMISSION_TOPICS) and "placement" in found
+            and re.search(r"\b(?:salary|package|pay|amount|lpa)\b", lower)):
+        found.discard("placement")
     # WBJEE portal registration means WBJEE is the primary topic.
     if found & {"wbjee", "jeca", "jelet", "jemat", "pget", "cet"}:
         found.discard("registration")
@@ -765,7 +770,13 @@ def _question_scope_matches(question, record):
     if re.search(r"\bholidays?\b", q):
         if not re.search(r"\b(?:holidays?|puja|vacation|hostel\s+clos(?:ure|ed)|campus\s+clos(?:ure|ed))\b", primary):
             return False
-    if re.search(r"\b(?:placements?|recruitment)\b", q):
+    # A question about placement salary *within a WBJEE notice* is
+    # a requested fact, not a search for recruitment announcements.
+    placement_as_field = bool(
+        re.search(r"\b(?:salary|package|lpa)\b", q)
+        and set(detect_search_topics(question)) & set(ADMISSION_TOPICS)
+    )
+    if re.search(r"\b(?:placements?|recruitment)\b", q) and not placement_as_field:
         if not re.search(r"\b(?:placements?|recruitment|campus\s+drives?|career\s+fair|training\s+and\s+placement|tpo)\b", primary):
             return False
     if re.search(r"\b(?:document\s+verification|verification\s+and\s+admission)\b", q):
@@ -781,11 +792,30 @@ def _question_scope_matches(question, record):
                 r"\b(?:admission|counselling|counseling|reporting)\b", primary):
             return False
 
-    # Requests explicitly for exam *schedules* should not be satisfied by fee
-    # waivers or administrative documents merely using the word examination.
-    if (re.search(r"\b(?:exam|examination|semester)\b", q)
+    # A routine/timetable is a subject, not incidental usage of 'exam'
+    # or the word 'date' in an admission/registration notice.
+    if re.search(r"\b(?:routines?|time[ -]?tables?|exam(?:ination)?\s+schedules?)\b", q):
+        if not re.search(
+            r"\b(?:routines?|time[ -]?tables?|exam(?:ination)?\s+schedules?|"
+            r"examination\s+programmes?|exam\s+programmes?)\b", primary
+        ):
+            return False
+    elif (re.search(r"\b(?:exam|examination|semester)\b", q)
             and re.search(r"\bschedules?\b", q)):
-        if not re.search(r"\b(?:schedules?|routines?|timetables?|dates?|programmes?|programs?)\b", primary):
+        if not re.search(r"\b(?:schedules?|routines?|timetables?|exam\s+programmes?)\b", primary):
+            return False
+    # A general admission-reporting question must target reporting,
+    # not a portal closure that only mentions admission in its body.
+    if re.search(r"\badmission\s+reporting\b|\breporting\s+instructions?\b", q):
+        if not re.search(r"\b(?:report(?:ing)?|physical\s+verification|"
+                         r"document\s+verification|allottees?)\b", primary):
+            return False
+    # University holiday ≠ hostel closure, even when both involve Durga Puja.
+    if re.search(r"\b(?:university|academic|official)\s+holidays?\b", q):
+        if re.search(r"\bhostels?\b", primary):
+            return False
+        if not re.search(r"\b(?:holidays?|vacation|holiday\s+list|"
+                         r"university\s+closure)\b", primary):
             return False
 
     # Recruitment searches should not substitute staff appointment orders for

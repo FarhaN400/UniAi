@@ -47,6 +47,7 @@ from Module4.evidence import (
 
 from Module4.fee_utils import answer_fee_question
 from Module4.document_utils import answer_document_question
+from notice_quality import display_summary
 
 
 MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
@@ -317,7 +318,8 @@ def format_notice_line(record, number=None):
     if data.get("reference_no"):
         lines.append(f"Reference: {data['reference_no']}")
 
-    details = data.get("summary") or data.get("action_required")
+    checked_summary, summary_warning = display_summary(record)
+    details = checked_summary or (None if summary_warning else data.get("action_required"))
     if not details and data.get("key_points"):
         details = data["key_points"][0]
     if details:
@@ -332,6 +334,8 @@ def format_notice_line(record, number=None):
                 details = prefix.rsplit(" ", 1)[0].rstrip(",;:") + "…"
         lines.append(f"Summary: {details}")
 
+    if summary_warning:
+        lines.append(f"Extraction warning: {summary_warning}")
     if record.get("url"):
         lines.append(f"Official source: {record['url']}")
 
@@ -1045,8 +1049,11 @@ def _structured_notice_overview(record, *, max_points=9):
         lines.append(f"Reference: {_plain(sd['reference_no'])}")
     if sd.get("target_audience"):
         lines.append(f"Who it concerns: {_plain(sd['target_audience'])}")
-    if sd.get("summary"):
-        lines.append(f"Overview: {_plain(sd['summary'])}")
+    checked_summary, summary_warning = display_summary(record)
+    if checked_summary:
+        lines.append(f"Overview: {_plain(checked_summary)}")
+    if summary_warning:
+        lines.append(f"Extraction warning: {summary_warning}")
     if sd.get("action_required"):
         lines.append(f"Action required: {_plain(sd['action_required'])}")
     dates = sd.get("important_dates") or {}
@@ -1091,6 +1098,14 @@ def _field_answer(question, record, field=None):
     lower = str(question or "").casefold()
     source = _record_source(record)
     title = _record_heading(record)
+    # A placement-salary question is a requested fact within the named
+    # admission notice, not evidence of a separate recruitment notice.
+    if re.search(r"\bguaranteed\b", lower) and re.search(
+        r"\b(?:placement|salary|package|ctc)\b", lower
+    ):
+        guidance = missing_amount_guidance(question, record)
+        if guidance:
+            return f"{guidance}\n{source}"
     # A request for reopening is NOT a request to list more hostel notices.
     # Closure-end dates do not establish an official reopening date by themselves.
     if re.search(r"\breopen(?:s|ed|ing)?\b", lower):
@@ -1121,17 +1136,33 @@ def _field_answer(question, record, field=None):
             return f"{verified}\n{source}"
         dates = sd.get("important_dates") or {}
         date_value = dates.get("last_date") if isinstance(dates, dict) else None
+        if re.search(r"\bapplication\s+deadline\b|\bdeadline\s+for\s+application\b", lower):
+            return (f"I could not verify an application deadline for '{title}'. "
+                    f"An extracted reporting/verification last date is not necessarily "
+                    f"an application deadline. Please consult the PDF.\n{source}")
         if date_value:
             return (f"The extracted notice lists a last date of {_plain(date_value)}. "
                     f"Check the PDF to confirm which action it applies to.\n{source}")
         return f"I could not verify a deadline from this notice's extracted details.\n{source}"
     if field == "fees" or re.search(r"\b(?:application\s+fee|fees?|charges?)\b", lower):
+        if (re.search(r"\bboth\b", lower) and
+                re.search(r"\bapplication\s+fees?\b", lower) and
+                re.search(r"\badmission\s+fees?\b", lower)):
+            from Module4.fee_utils import labeled_fee_evidence
+            named = [kind for kind in ("application", "admission")
+                     if labeled_fee_evidence(record, kind)]
+            if len(named) == 2:
+                return (f"Both application-fee and admission-fee amounts have "
+                        f"directly labelled evidence in '{title}'.\n{source}")
+            return (f"I cannot verify both fee categories in '{title}' from "
+                    f"directly labelled evidence. Finding one category does "
+                    f"not establish the other.\n{source}")
         return answer_fee_question(question, record, source, title)
     if field == "documents":
-        return answer_document_question(record, title, source)
+        return answer_document_question(record, title, source, question=question)
     if field in ("eligibility", "procedure", "location", "time", "contact"):
         expressions = {
-            "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2)\b",
+            "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2|caste|category|reserved|sc|st|obc|ews|pwd|reservation)\b",
             "procedure": r"\b(?:apply|application|registration|submit|submission|portal|steps?|report(?:ing)?|procedure|process)\b",
             "location": r"\b(?:campus|building|venue|room|location|reporting\s+(?:at|venue)|salt\s+lake|haringhata)\b",
             "time": r"\b(?:reopen|leave|closing|closure|time|timing|schedule|hours?|a\.m\.|p\.m\.|date)\b",
@@ -1248,6 +1279,138 @@ def _safe_grounded_answer(question, records, st, *, preserve=False):
     return answer
 
 
+def _preferred_evidence_record(question, records):
+    """Choose a clearly relevant notice, not a generic recent vector hit.
+
+    Do not claim that one round's checklist or deadlines apply to all rounds.
+    The selected source remains explicit in the returned answer.
+    """
+    q = str(question or "").casefold()
+    def score(item):
+        text = _record_heading(item).casefold()
+        weight = 0
+        if re.search(r"\breopen(?:ing|s|ed)?\b", q):
+            weight += 30 if "hostel" in text and "clos" in text else 0
+        if re.search(r"\b(?:reporting instructions?|admission reporting)\b", q):
+            weight += 30 if re.search(r"\breport(?:ing)?\b|\bverific", text) else 0
+        if re.search(r"\b(?:documents?|verific|marksheets?|photocop)", q):
+            weight += 18 if re.search(r"\bverific|\ballottees?\b", text) else 0
+        if re.search(r"\b(?:registration of students?|students? registration)\b", q):
+            weight += 20 if "registration" in text and (
+                "student" in text or "admitted" in text
+            ) else 0
+        if re.search(r"\b(?:eligibility|eligible)\b", q):
+            weight += 8 if re.search(r"\b(?:eligib|admission)\b", text) else 0
+        return weight
+    return max(enumerate(records), key=lambda pair: (
+        score(pair[1]), -pair[0]
+    ))[1]
+
+
+def _direct_fact_answer(question, records, parsed):
+    """Return (answer, supporting_notice) when a sourced deterministic
+    response is safer than an unreliable multi-document LLM call.
+    """
+    if not records:
+        return None
+    q = str(question or "").casefold()
+    field = getattr(parsed, "requested_field", None)
+    # These must remain evidence questions, not inferred generic policies.
+    if not field and re.search(r"\breopen(?:ing|s|ed)?\b", q):
+        field = "time"
+    if not field and re.search(r"\breporting instructions?\b", q):
+        field = "procedure"
+    if not field and re.search(r"\bdocuments?\b|\bphotocop(?:y|ies)\b", q):
+        field = "documents"
+    if not field and re.search(r"\b(?:eligible|eligibility)\b", q):
+        field = "eligibility"
+    if not field and re.search(r"\bguaranteed\b", q) and re.search(
+        r"\b(?:placement|salary|package|ctc)\b", q
+    ):
+        field = "placement_amount"
+    target = _preferred_evidence_record(question, records)
+
+    # A single identified notice can answer an academic-session identity
+    # question directly from its title; do not ask Groq to guess the session.
+    if re.search(r"\bwhich academic session\b|\bwhat academic session\b", q):
+        title = _record_heading(target)
+        m = re.search(r"\b(20\d{2})\s*[-/–]\s*(?:20)?(\d{2})\b", title)
+        if m:
+            return (f"The notice '{title}' concerns academic session "
+                    f"{m.group(1)}-{m.group(2)}.\n{_record_source(target)}", target)
+
+    if field in ("documents", "fees", "deadline", "eligibility", "procedure",
+                 "issue_date", "reference_number", "location", "time", "contact",
+                 "placement_amount", "source"):
+        # Unscoped checklist queries may refer to several different notices.
+        # Returning one institution-wide checklist would be misleading.
+        if (len(records) > 1 and field == "documents" and not re.search(
+            r"\b(?:wbjee|wbjeeb|jelet|jeca|pget|cet|registration|hostel|"
+            r"this|that|the\s+notice)\b", q
+        )):
+            return None
+
+        # Which JELET-2025 circular? There may be several different rounds.
+        if field == "issue_date" and len(records) > 1 and re.search(
+            r"\bjelet\b.*\b20\d{2}\b", q
+        ) and not re.search(r"\b(?:round|phase|dated)\b", q):
+            choices = "\n".join(
+                f"- {_record_heading(item)} "
+                f"({(item.get('structured_data') or {}).get('issue_date') or 'date unverified'})\n"
+                f"  {_record_source(item)}"
+                for item in records[:4]
+            )
+            return (f"There are multiple JELET notices for this year. "
+                    f"Which notice's issue date do you mean?\n{choices}",
+                    records[:4])
+
+        answer = _field_answer(question, target, field)
+        if answer is not None:
+            if len(records) > 1 and field == "documents":
+                answer += ("\nNote: Requirements can vary by admission round. "
+                           "This answer applies to the cited notice only.")
+            return answer, target
+    return None
+
+
+def _compare_hostel_and_holiday(question, st):
+    """Compare distinct kinds of Puja notices without merging their dates."""
+    q = str(question or "").casefold()
+    if not (re.search(r"\bcompar", q) and "hostel" in q
+            and re.search(r"\bholiday|puja", q)):
+        return None
+    from retrieve import retrieve_filtered_notices
+    found, sections = [], []
+    for label, query in (
+        ("Hostel closure", "hostel closure during Durga Puja"),
+        ("University holiday", "university holiday during Durga Puja"),
+    ):
+        matches = retrieve_filtered_notices(query, top_k=3, sort_latest=True)
+        # Broad holiday searches can include hostel notices; the two sources
+        # must remain genuinely distinct.
+        if label == "University holiday":
+            matches = [r for r in matches if not re.search(
+                r"\bhostel\b", _record_heading(r), re.I
+            )]
+        if not matches:
+            sections.append(f"{label}: No matching processed notice was verified.")
+            continue
+        notice = matches[0]
+        data = notice.get("structured_data") or {}
+        summary, warning = display_summary(notice)
+        description = str(summary or data.get("action_required") or "").strip()
+        if warning:
+            description = warning
+        sections.append(
+            f"{label}: {_record_heading(notice)}\n"
+            + (f"{description[:700]}\n" if description else "")
+            + _record_source(notice)
+        )
+        found.append(notice)
+    return _save_reply(st, question, "\n\n".join(sections),
+                       records=found, active=None)
+
+
 def _comparison_notice_answer(question, st):
     """Compare distinct years without allowing the first year to filter both."""
     from retrieve import retrieve_filtered_notices
@@ -1274,9 +1437,16 @@ def _comparison_notice_answer(question, st):
     lines = []
     for label, record in found:
         sd = record.get("structured_data") or {}
-        details = [str(p) for p in sd.get("key_points") or [] if re.search(
-            r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
-        )]
+        if re.search(r"\b(?:deadlines?|reporting dates?|last dates?)\b", question, re.I):
+            extracted_dates = sd.get("important_dates") or {}
+            raw_last = extracted_dates.get("last_date") if isinstance(extracted_dates, dict) else None
+            details = ([f"Extracted last date: {raw_last}. Verify its purpose "
+                        f"(reporting versus application) against the PDF."] if raw_last
+                       else ["The matching notice has no reliably identified reporting deadline."])
+        else:
+            details = [str(p) for p in sd.get("key_points") or [] if re.search(
+                r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
+            )]
         if not details:
             details = [str(sd.get("summary") or "No matching details extracted")]
         lines.append(f"{label} — {_record_heading(record)}")
@@ -1306,6 +1476,15 @@ def ask_uniai(question, state=None):
     if _out_of_scope(question):
         return _save_reply(st, question, "I only answer questions about MAKAUT university notices. "
                            "Please ask about admissions, exams, hostels, registration or other notices.")
+    if (re.search(r"\bapplication\s+fee\b", question, re.I)
+            and re.search(r"\bonly\s+states?\s+(?:an?\s+)?admission\s+fee\b",
+                          question, re.I)):
+        return _save_reply(
+            st, question,
+            "If a notice states only an admission fee, that is not evidence "
+            "of an application fee. I cannot infer an application-fee amount "
+            "without a separately labelled official source."
+        )
 
     # Avoid a Groq classification API call for deterministic student queries.
     # Opt-in classifier remains available for experiments without breaking
@@ -1411,6 +1590,9 @@ def ask_uniai(question, state=None):
 
     if re.search(r"\b(?:compare|comparison|difference\s+between)\b", question, re.I):
         try:
+            compared = _compare_hostel_and_holiday(question, st)
+            if compared is not None:
+                return compared
             compared = _comparison_notice_answer(question, st)
             if compared is not None:
                 return compared
@@ -1454,6 +1636,29 @@ def ask_uniai(question, state=None):
         else:
             reply = _no_matches(question)
         return _save_reply(st, question, reply, records=[])
+
+    if (len(records) > 1 and not is_pure_latest
+            and not _is_list_request(question, parsed)
+            and issue_date is None):
+        direct = _direct_fact_answer(question, records, parsed)
+        if direct is not None:
+            text, supported = direct
+            cited = supported if isinstance(supported, list) else [supported]
+            active_source = supported if isinstance(supported, dict) else None
+            return _save_reply(st, question, text, records=cited, active=active_source)
+        if getattr(parsed, "requested_field", None) == "documents":
+            # No globally valid checklist exists for unspecified university
+            # processes. Ask the student to identify the actual notice.
+            options = "\n".join(
+                f"- {_record_heading(r)}\n  {_record_source(r)}"
+                for r in records[:3]
+            )
+            return _save_reply(
+                st, question,
+                "Document requirements vary by notice, course and admission "
+                "round. Please identify which official circular you mean:\n"
+                + options, records=records[:3],
+            )
 
     if _is_list_request(question, parsed) or is_pure_latest or issue_date is not None:
         content = (format_notice_list(records) if len(records) > 1
