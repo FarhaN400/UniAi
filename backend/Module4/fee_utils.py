@@ -103,13 +103,13 @@ def labeled_fee_evidence(record, kind):
     An unlabeled fees.amount is *never* promoted into an application fee.
     """
     sd = record.get("structured_data") or {}
-    text_sources = [record.get("raw_text")]
-    text_sources.extend(sd.get("key_points") or [])
-    text_sources.append(sd.get("action_required"))
+    text_sources = [(record.get("raw_text"), False)]
+    text_sources.extend((point, True) for point in (sd.get("key_points") or []))
+    text_sources.append((sd.get("action_required"), True))
     results = []
     seen = set()
-    for text in text_sources:
-        if re.search(r"\brequir(?:es?|ing)\s+verification\b", str(text or ""), re.I):
+    for text, extracted in text_sources:
+        if extracted and re.search(r"\brequir(?:es?|ing)\s+verification\b", str(text or ""), re.I):
             # Merged chunks explicitly flagged these values as unverified.
             continue
         for quote, amount in _directly_labeled_fee(text, kind):
