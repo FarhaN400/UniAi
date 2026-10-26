@@ -737,20 +737,20 @@ def _search_topic_matches(record, topics):
     )).casefold()
     title_scoped = {"hostel", "scholarship", "holiday", "exam"}
     for topic in topics & title_scoped:
-        if topic == "hostel" and not re.search(r"\\bhostels?\\b", title):
+        if topic == "hostel" and not re.search(r"\bhostels?\b", title):
             return False
         if topic == "scholarship" and not re.search(
-            r"\\b(?:scholarships?|fellowships?|doctoral\\s+fellowship|"
-            r"stipends?|financial\\s+assistance)\\b", title
+            r"\b(?:scholarships?|fellowships?|doctoral\s+fellowship|"
+            r"stipends?|financial\s+assistance)\b", title
         ):
             return False
         if topic == "holiday" and not re.search(
-            r"\\b(?:holidays?|puja|vacations?|closure|closed)\\b", title
+            r"\b(?:holidays?|puja|vacations?|closure|closed)\b", title
         ):
             return False
         if topic == "exam" and not re.search(
-            r"\\b(?:exams?|examinations?|semester|routines?|timetables?|"
-            r"time[ -]?tables?|schedule|programme|program)\\b", title
+            r"\b(?:exams?|examinations?|semester|routines?|timetables?|"
+            r"time[ -]?tables?|schedule|programme|program)\b", title
         ):
             return False
     # A query naming several subjects should not be satisfied by a single
