@@ -47,6 +47,7 @@ from Module4.evidence import (
 
 from Module4.fee_utils import answer_fee_question
 from Module4.document_utils import answer_document_question
+from notice_quality import display_summary
 
 
 MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
@@ -317,7 +318,8 @@ def format_notice_line(record, number=None):
     if data.get("reference_no"):
         lines.append(f"Reference: {data['reference_no']}")
 
-    details = data.get("summary") or data.get("action_required")
+    checked_summary, summary_warning = display_summary(record)
+    details = checked_summary or (None if summary_warning else data.get("action_required"))
     if not details and data.get("key_points"):
         details = data["key_points"][0]
     if details:
@@ -332,6 +334,8 @@ def format_notice_line(record, number=None):
                 details = prefix.rsplit(" ", 1)[0].rstrip(",;:") + "…"
         lines.append(f"Summary: {details}")
 
+    if summary_warning:
+        lines.append(f"Extraction warning: {summary_warning}")
     if record.get("url"):
         lines.append(f"Official source: {record['url']}")
 
@@ -1045,8 +1049,11 @@ def _structured_notice_overview(record, *, max_points=9):
         lines.append(f"Reference: {_plain(sd['reference_no'])}")
     if sd.get("target_audience"):
         lines.append(f"Who it concerns: {_plain(sd['target_audience'])}")
-    if sd.get("summary"):
-        lines.append(f"Overview: {_plain(sd['summary'])}")
+    checked_summary, summary_warning = display_summary(record)
+    if checked_summary:
+        lines.append(f"Overview: {_plain(checked_summary)}")
+    if summary_warning:
+        lines.append(f"Extraction warning: {summary_warning}")
     if sd.get("action_required"):
         lines.append(f"Action required: {_plain(sd['action_required'])}")
     dates = sd.get("important_dates") or {}
@@ -1121,6 +1128,10 @@ def _field_answer(question, record, field=None):
             return f"{verified}\n{source}"
         dates = sd.get("important_dates") or {}
         date_value = dates.get("last_date") if isinstance(dates, dict) else None
+        if re.search(r"\bapplication\s+deadline\b|\bdeadline\s+for\s+application\b", lower):
+            return (f"I could not verify an application deadline for '{title}'. "
+                    f"An extracted reporting/verification last date is not necessarily "
+                    f"an application deadline. Please consult the PDF.\n{source}")
         if date_value:
             return (f"The extracted notice lists a last date of {_plain(date_value)}. "
                     f"Check the PDF to confirm which action it applies to.\n{source}")
