@@ -316,7 +316,7 @@ def retrieve_time_based(question, top_k=3):
         records = [r for r in records if official_issue_date(r) == target]
     elif "yesterday" in text:
         target = now.date() - timedelta(days=1)
-        records = [r for r in records if parse_issue_date(r).date() == target]
+        records = [r for r in records if official_issue_date(r) == target]
     elif year is not None:
         records = [r for r in records if (official_issue_date(r) or date.min).year == year]
     records.sort(key=parse_issue_date, reverse=True)
