@@ -45,6 +45,8 @@ from Module4.evidence import (
     missing_amount_guidance,
 )
 
+from Module4.fee_utils import labeled_fee_evidence, query_fee_kind
+
 
 MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 NO_RESULTS_MESSAGE = (
@@ -1123,31 +1125,45 @@ def _field_answer(question, record, field=None):
                     f"Check the PDF to confirm which action it applies to.\n{source}")
         return f"I could not verify a deadline from this notice's extracted details.\n{source}"
     if field == "fees" or re.search(r"\b(?:application\s+fee|fees?|charges?)\b", lower):
+        kind = query_fee_kind(question)
         fees = sd.get("fees") or {}
+        if kind:
+            # The generic fees.amount (including legacy records) does not
+            # identify a fee category. Require an explicit label and amount in
+            # this notice's own OCR or extracted evidence.
+            matches = labeled_fee_evidence(record, kind)
+            if matches:
+                lines = list(dict.fromkeys(quote for quote, _ in matches))
+                return (f"{kind.capitalize()}-fee evidence from '{title}':\n"
+                        + "\n".join(f"- {line}" for line in lines)
+                        + f"\n{source}")
+            return (f"I cannot verify a {kind}-fee amount from the available "
+                    f"extracted details of '{title}'. A different fee type does "
+                    f"not establish this amount. Check the original PDF.\n{source}")
+
+        # General fee questions may refer to any payment category. Prefer a
+        # directly labelled excerpt over an ambiguously typed legacy amount.
+        evidence = []
+        for fee_kind in ("application", "admission", "registration", "examination"):
+            for quote, _ in labeled_fee_evidence(record, fee_kind):
+                if quote not in evidence:
+                    evidence.append(quote)
+        if evidence:
+            return (f"Fee information stated in '{title}':\n"
+                    + "\n".join(f"- {line}" for line in evidence[:6])
+                    + f"\n{source}")
+
         amount = fees.get("amount") if isinstance(fees, dict) else None
         currency = fees.get("currency") if isinstance(fees, dict) else None
-        application_specific = "application" in lower
-        if application_specific:
-            # The schema's generic fees.amount is not necessarily an application
-            # fee. Extract an explicitly labeled amount from the official OCR
-            # or structured text; never convert an admission fee into one.
-            texts = [str(sd.get("action_required") or "")]
-            texts.extend(str(item) for item in (sd.get("key_points") or []))
-            texts.append(str(record.get("raw_text") or "")[:20000])
-            money = r"(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+(?:\.\d+)?\s*(?:rupees|INR)"
-            for evidence_line in texts:
-                match = re.search(
-                    rf"\bapplication\s+fees?\b.{{0,90}}?(?:{money})|"
-                    rf"(?:{money}).{{0,70}}?\bapplication\s+fees?\b",
-                    evidence_line, re.I | re.S,
-                )
-                if match:
-                    fragment = " ".join(match.group(0).split())
-                    return f"The official notice states: {fragment}.\n{source}"
-            return ("I cannot confirm an application-fee amount from the available "
-                    f"extracted details of '{title}'. Consult the official PDF.\n{source}")
+        fee_type = fees.get("type") if isinstance(fees, dict) else None
         if amount not in (None, "", "null", "None"):
-            return f"Fee listed in this notice: {_plain(amount)} {_plain(currency)}.\n{source}"
+            label = f"{fee_type.capitalize()} fee" if fee_type in (
+                "application", "admission", "registration", "examination",
+                "tuition", "processing", "other"
+            ) else "Fee (category not verified)"
+            return (f"{label} in the extracted record: "
+                    f"{_plain(amount)} {_plain(currency)}. "
+                    f"Confirm the category and amount in the original PDF.\n{source}")
         return f"I cannot verify a fee amount from the extracted notice details.\n{source}"
     if field in ("documents", "eligibility", "procedure", "location", "time", "contact"):
         expressions = {
