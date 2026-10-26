@@ -208,6 +208,7 @@ def merge_chunk_results(results):
             "type": None
         },
         "action_required": None,
+        "required_documents": [],
         "key_points": [],
         "issued_by": None,
         "summary": None
@@ -280,6 +281,19 @@ def merge_chunk_results(results):
     for item in results:
         for point in item.get("key_points", []):
             add_point(point)
+
+    # Document requirements may appear on separate PDF pages. Preserve
+    # individually named items from every chunk, never replace with the first.
+    seen_docs = set()
+    for item in results:
+        for doc in item.get("required_documents") or []:
+            if not isinstance(doc, str) or not doc.strip():
+                continue
+            cleaned = " ".join(doc.split())
+            key = cleaned.casefold()
+            if key not in seen_docs:
+                seen_docs.add(key)
+                merged["required_documents"].append(cleaned)
 
     # Preserve action-required information from all chunks.
     actions = []
