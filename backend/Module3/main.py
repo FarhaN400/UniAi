@@ -83,6 +83,10 @@ def build_retrieval_text(notice):
 
     parts.extend(key_points)
 
+    # Include exact document names extracted from the official notice.
+    required_documents = sd.get("required_documents") or []
+    parts.extend(f"Required document: {doc}" for doc in required_documents if doc)
+
     # Include important dates
     dates = sd.get("important_dates") or {}
 
