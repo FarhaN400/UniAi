@@ -101,6 +101,20 @@ class LiveGroundingRegressions(unittest.TestCase):
         self.assertIn("Extraction warning",answer)
         self.assertNotIn("13-15 Oct 2024",answer)
 
+    def test_q02_live_jelet_summary_with_reporting_in_two_rounds(self):
+        record = notice(
+            "jelet", "Reporting dates for JELET-2025 allotted students",
+            summary=(
+                "The university instructs JELET-2025 allotted candidates to "
+                "report for admission at Haringhata Campus in two rounds: "
+                "13‑15 Oct 2024 and 18‑20 Oct 2024."
+            ),
+        )
+        self.assertIsNotNone(summary_warning(record))
+        rendered = main_functions("format_notice_line")["format_notice_line"](record)
+        self.assertNotIn("Oct 2024", rendered)
+        self.assertIn("Extraction warning", rendered)
+
     def test_q16_deadline_never_promotes_reporting_last_date(self):
         ns=main_functions("_field_answer")
         record=notice("wbjee","WBJEE 2026 Reporting")
