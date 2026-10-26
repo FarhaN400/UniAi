@@ -56,6 +56,8 @@ class NoticeSchema(BaseModel):
     important_dates: ImportantDates
     fees: Fees
     action_required: Optional[str]
+    # Empty on older notice records; never infer a document list.
+    required_documents: List[str] = Field(default_factory=list)
     key_points: List[str]
     issued_by: Optional[str]
     summary: str
