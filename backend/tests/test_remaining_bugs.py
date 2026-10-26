@@ -3,6 +3,7 @@
 PYTHONPATH=backend python -m unittest discover -s backend/tests -p 'test_remaining_bugs.py' -v
 """
 import ast
+import json
 import copy
 import os
 import sys
@@ -327,6 +328,24 @@ class SyncThroughputTests(unittest.TestCase):
             )
         self.assertEqual(calls, [("recheck", 3), ("process", 3), ("index", 10)])
         self.assertEqual(result["indexed"], 2)
+
+
+class EvaluationFixtureTests(unittest.TestCase):
+    def test_exactly_50_distinct_scenarios_across_nine_topics(self):
+        path = Path(__file__).resolve().parents[1] / "evaluation" / "questions_50.json"
+        questions = json.loads(path.read_text(encoding="utf-8"))["questions"]
+        self.assertEqual(len(questions), 50)
+        self.assertEqual(len({x["id"] for x in questions}), 50)
+        topics = {x["category"] for x in questions}
+        self.assertEqual(len(topics), 9)
+        self.assertTrue(all(x["question"] and x["expected_behavior"] for x in questions))
+
+    def test_multi_turn_followup_set_reuses_same_conversation(self):
+        path = Path(__file__).resolve().parents[1] / "evaluation" / "questions_50.json"
+        questions = json.loads(path.read_text(encoding="utf-8"))["questions"]
+        followups = [x for x in questions if x["category"] == "followups"]
+        self.assertEqual(len(followups), 6)
+        self.assertEqual(len({x["conversation"] for x in followups}), 1)
 
 
 if __name__ == "__main__":
