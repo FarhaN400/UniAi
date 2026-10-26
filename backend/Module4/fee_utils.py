@@ -121,3 +121,54 @@ def labeled_fee_evidence(record, kind):
             # Use the strongest source that provides direct, typed fee evidence.
             return results[:5]
     return []
+
+
+def answer_fee_question(question, record, source, title):
+    """Provide a cautious, source-linked answer for fee questions.
+
+    The exact category requested must have directly labelled fee evidence.
+    Legacy/untyped extraction amounts only support generic fee responses.
+    """
+    sd = record.get("structured_data") or {}
+    lower = str(question or "").casefold()
+    kind = query_fee_kind(question)
+    fees = sd.get("fees") or {}
+    if kind:
+        # The generic fees.amount (including legacy records) does not
+        # identify a fee category. Require an explicit label and amount in
+        # this notice's own OCR or extracted evidence.
+        matches = labeled_fee_evidence(record, kind)
+        if matches:
+            lines = list(dict.fromkeys(quote for quote, _ in matches))
+            return (f"{kind.capitalize()}-fee evidence from '{title}':\n"
+                    + "\n".join(f"- {line}" for line in lines)
+                    + f"\n{source}")
+        return (f"I cannot verify a {kind}-fee amount from the available "
+                f"extracted details of '{title}'. A different fee type does "
+                f"not establish this amount. Check the original PDF.\n{source}")
+
+    # General fee questions may refer to any payment category. Prefer a
+    # directly labelled excerpt over an ambiguously typed legacy amount.
+    evidence = []
+    for fee_kind in ("application", "admission", "registration", "examination",
+                     "tuition", "processing", "counselling"):
+        for quote, _ in labeled_fee_evidence(record, fee_kind):
+            if quote not in evidence:
+                evidence.append(quote)
+    if evidence:
+        return (f"Fee information stated in '{title}':\n"
+                + "\n".join(f"- {line}" for line in evidence[:6])
+                + f"\n{source}")
+
+    amount = fees.get("amount") if isinstance(fees, dict) else None
+    currency = fees.get("currency") if isinstance(fees, dict) else None
+    fee_type = fees.get("type") if isinstance(fees, dict) else None
+    if amount not in (None, "", "null", "None"):
+        label = f"{fee_type.capitalize()} fee" if fee_type in (
+            "application", "admission", "registration", "examination",
+            "tuition", "processing", "counselling", "other"
+        ) else "Fee (category not verified)"
+        return (f"{label} in the extracted record: "
+                f"{str(amount)} {str(currency or '')}. "
+                f"Confirm the category and amount in the original PDF.\n{source}")
+    return f"I cannot verify a fee amount from the extracted notice details.\n{source}"
