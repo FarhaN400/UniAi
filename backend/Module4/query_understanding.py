@@ -170,7 +170,12 @@ def _extract_requested_field(text):
         return "reference_number"
     if any(k in text_clean for k in ["application fee", "fees", "fee", "cost", "amount", "charge", "charges"]):
         return "fees"
-    if any(k in text_clean for k in ["document", "documents", "docs", "certificate", "mark sheet", "photo", "verification guidelines"]):
+    if any(k in text_clean for k in ["document", "documents", "docs", "certificate",
+                                   "mark sheet", "marksheet", "photo", "admit card",
+                                   "rank card", "allotment card", "photocopy",
+                                   "photocopies", "verification guidelines"]):
+        return "documents"
+    if re.search(r"\b(?:what|which)\b.{0,90}\b(?:bring|carry|submit|produce)\b", text_clean):
         return "documents"
     if any(k in text_clean for k in ["eligibility", "eligible", "who can apply", "who is eligible"]):
         return "eligibility"
