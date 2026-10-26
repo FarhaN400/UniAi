@@ -1250,32 +1250,40 @@ def _safe_grounded_answer(question, records, st, *, preserve=False):
 def _comparison_notice_answer(question, st):
     """Compare distinct years without allowing the first year to filter both."""
     from retrieve import retrieve_filtered_notices
-    years = list(dict.fromkeys(int(y) for y in re.findall(r"\b(20\d{2})\b", question)))
-    if len(years) < 2:
+    from academic_scope import academic_sessions
+    sessions = academic_sessions(question)
+    if len(sessions) >= 2:
+        # The ending year of an academic session is NOT a third comparison
+        # target. Compare 2025-26 against 2026-27, not 2025/2026/2027.
+        targets = [(start, f"{start}-{end}") for start, end in sessions]
+    else:
+        years = list(dict.fromkeys(int(y) for y in re.findall(r"\b(20\d{2})\b", question)))
+        targets = [(year, str(year)) for year in years]
+    if len(targets) < 2:
         return None
     found = []
     missing = []
-    for year in years[:3]:
+    for year, label in targets[:3]:
         candidates = retrieve_filtered_notices(question, top_k=1,
                                                force_year=year)
         if candidates:
-            found.append((year, candidates[0]))
+            found.append((label, candidates[0]))
         else:
-            missing.append(year)
+            missing.append(label)
     lines = []
-    for year, record in found:
+    for label, record in found:
         sd = record.get("structured_data") or {}
         details = [str(p) for p in sd.get("key_points") or [] if re.search(
             r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
         )]
         if not details:
             details = [str(sd.get("summary") or "No matching details extracted")]
-        lines.append(f"{year} — {_record_heading(record)}")
+        lines.append(f"{label} — {_record_heading(record)}")
         lines.extend(f"- {point[:700]}" for point in details[:5])
         lines.append(_record_source(record))
     if missing:
         lines.append("I couldn't find a matching processed notice for: " +
-                     ", ".join(map(str, missing)) + ". No comparison facts were invented.")
+                     ", ".join(missing) + ". No comparison facts were invented.")
     if not lines:
         lines = [_no_matches(question)]
     records = [record for _, record in found]
