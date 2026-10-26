@@ -5,7 +5,9 @@ No external APIs are called.
 """
 import unittest
 
-from Module4.fee_utils import labeled_fee_evidence, query_fee_kind
+from Module4.fee_utils import (
+    answer_fee_question, labeled_fee_evidence, query_fee_kind,
+)
 
 
 def _record(raw_text="", *, amount=None, fee_type=None, key_points=None):
@@ -70,6 +72,18 @@ class FeeEvidenceTests(unittest.TestCase):
         r = _record("Application fee: NIL. Admission fee: Rs. 500.")
         self.assertEqual(labeled_fee_evidence(r, "application"), [])
 
+    def test_provisional_merged_fee_is_not_confirmed(self):
+        r = _record(key_points=[
+            "Extracted application fee candidate requiring verification: 500 INR"
+        ])
+        self.assertEqual(labeled_fee_evidence(r, "application"), [])
+
+    def test_unrelated_review_in_raw_does_not_hide_fee(self):
+        r = _record(
+            "Documents requiring verification. Application fee: Rs. 275."
+        )
+        self.assertEqual(labeled_fee_evidence(r, "application")[0][1], "Rs. 275")
+
     def test_question_fee_type_classification(self):
         cases = [
             ("What is the application fee?", "application"),
@@ -78,6 +92,8 @@ class FeeEvidenceTests(unittest.TestCase):
             ("What is the registration fee?", "registration"),
             ("How much is the exam fee?", "examination"),
             ("What is the fee in this notice?", None),
+            ("Compare application fee and admission fee", None),
+            ("What is the counselling fee?", "counselling"),
         ]
         for q, want in cases:
             with self.subTest(question=q):
@@ -85,11 +101,13 @@ class FeeEvidenceTests(unittest.TestCase):
 
 
 class FeeAnswerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        # Loaded here so the evidence unit tests remain independent of LLM libs.
-        from Module4.main import _field_answer
-        cls.answer = staticmethod(_field_answer)
+    @staticmethod
+    def answer(question, record, field="fees"):
+        return answer_fee_question(
+            question, record,
+            source=record["url"],
+            title=record["title"],
+        )
 
     def test_application_fee_never_uses_admission_fee(self):
         r = _record("Application fee not specified. Admission fee: Rs. 500.",
@@ -110,6 +128,12 @@ class FeeAnswerTests(unittest.TestCase):
         answer = self.answer("What is the admission fee?", r, "fees")
         self.assertIn("Rs. 950", answer)
         self.assertNotIn("Rs. 150", answer)
+
+    def test_comparison_preserves_both_fee_categories(self):
+        r = _record("Application fee: ₹ 200. Admission fee: ₹ 900")
+        answer = self.answer("Compare application fee and admission fee", r)
+        self.assertIn("₹ 200", answer)
+        self.assertIn("₹ 900", answer)
 
     def test_unlabeled_fee_does_not_become_application_fee(self):
         r = _record(amount="1000", fee_type=None)
