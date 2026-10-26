@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from notice_dates import official_issue_date
 from review_workflow import approval_update, rejection_update, review_warnings
+from test_academic_scope import notice, import_retrieve_offline
 
 
 class OfficialIssueDateTests(unittest.TestCase):
@@ -45,6 +46,44 @@ class OfficialIssueDateTests(unittest.TestCase):
             official_issue_date({"structured_data": {"issue_date": date(2025, 9, 8)}}),
             date(2025, 9, 8)
         )
+
+
+class RetrievalDateTests(unittest.TestCase):
+    def test_detected_today_is_not_published_today(self):
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        old = notice("undated", "Notice without a publication date", issue_date=None)
+        old["detected_at"] = datetime.now(timezone.utc)
+        issued = notice("issued", "Notice with today's issue date",
+                        issue_date=today.strftime("%d-%m-%Y"))
+        issued["detected_at"] = datetime.now(timezone.utc) - timedelta(days=3)
+        retrieval = import_retrieve_offline([old, issued])
+        ids = [r["notice_id"] for r in retrieval.retrieve_time_based(
+            "notices published today", top_k=10)]
+        self.assertEqual(ids, ["issued"])
+
+    def test_yesterday_uses_issue_date_not_discovery_date(self):
+        yesterday = datetime.now(ZoneInfo("Asia/Kolkata")).date() - timedelta(days=1)
+        old = notice("undated", "Notice without issue date", issue_date=None)
+        old["detected_at"] = datetime.now(timezone.utc) - timedelta(days=1)
+        issued = notice("issued", "Notice issued yesterday",
+                        issue_date=yesterday.strftime("%d-%m-%Y"))
+        issued["detected_at"] = datetime.now(timezone.utc)
+        retrieval = import_retrieve_offline([old, issued])
+        ids = [r["notice_id"] for r in retrieval.retrieve_time_based(
+            "notices published yesterday", top_k=10)]
+        self.assertEqual(ids, ["issued"])
+
+    def test_exact_date_filters_missing_or_invalid_issued_dates(self):
+        published = notice("issued", "MAKAUT general circular", issue_date="26-10-2026")
+        undated = notice("undated", "MAKAUT general circular", issue_date=None)
+        undated["detected_at"] = datetime(2026, 10, 26, tzinfo=timezone.utc)
+        bad = notice("invalid", "MAKAUT general circular", issue_date="31-02-2026")
+        bad["detected_at"] = datetime(2026, 10, 26, tzinfo=timezone.utc)
+        retrieval = import_retrieve_offline([published, undated, bad])
+        results = retrieval.retrieve_filtered_notices(
+            "Notices issued on 26 October 2026", top_k=10
+        )
+        self.assertEqual([r["notice_id"] for r in results], ["issued"])
 
 
 class LongReviewTests(unittest.TestCase):
