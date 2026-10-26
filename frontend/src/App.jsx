@@ -7,6 +7,7 @@ import History from './pages/History';
 import Settings from './pages/Settings';
 import { loadChats, saveChats, getTheme, saveTheme, makeId } from './lib/storage';
 import { askUniAI, demoMode } from './lib/api';
+import { isPendingRetry } from './lib/retry';
 
 export default function App() {
   const [page, setPage] = useState('home');
@@ -63,12 +64,7 @@ export default function App() {
 
     if (isRetry) {
       const current = chats.find(c => c.id === id);
-      const last = current?.messages?.at(-1);
-      // Never resend old, already answered, or differently worded turns.
-      if (!last || last.role !== 'user' ||
-          last.id !== retryMessageId || last.text !== question) {
-        return;
-      }
+      if (!isPendingRetry(current, question, retryMessageId)) return;
     }
 
     setError('');
