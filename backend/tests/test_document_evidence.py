@@ -91,6 +91,25 @@ class RequiredDocumentsTests(unittest.TestCase):
         self.assertIn("couldn't verify a list of required documents", result)
         self.assertNotIn("- Application form", result)
 
+    def test_verification_announcement_does_not_make_application_form_required(self):
+        raw = (
+            "Document verification will be conducted on 10 October.\n"
+            "The application form is available on the admission portal.\n"
+            "For dates, visit the university website."
+        )
+        result = answer(notice(raw))
+        self.assertIn("couldn't verify a list", result)
+        self.assertNotIn("- The application form", result)
+
+    def test_no_aadhaar_required_phrasing(self):
+        raw = (
+            "No Aadhaar Card is required.\n"
+            "Bring original Rank Card for physical verification."
+        )
+        result = answer(notice(raw))
+        self.assertNotIn("- No Aadhaar", result)
+        self.assertIn("Rank Card", result)
+
     def test_explicitly_not_required_document_is_excluded(self):
         raw = (
             "Not required to bring Aadhaar Card.\n"
