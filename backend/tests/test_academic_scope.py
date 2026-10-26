@@ -261,6 +261,28 @@ class RetrievalIntegrationTests(unittest.TestCase):
             self._ids("Compare registration of students 2025-26 and 2026-27"),
             [])
 
+    def test_latest_notices_for_session_do_not_use_global_chronology(self):
+        self.assertFalse(self.module.is_pure_time_query(
+            "latest notices for academic session 2026-27"))
+        ids = [r["notice_id"] for r in self.module.retrieve_context(
+            "latest notices for academic session 2026-27", top_k=5)]
+        self.assertEqual(ids, ["new"])
+
+    def test_direct_time_retrieval_preserves_session_scope(self):
+        ids = [r["notice_id"] for r in self.module.retrieve_time_based(
+            "latest notices for 2026-27", top_k=5)]
+        self.assertEqual(ids, ["new"])
+
+    def test_latest_calendar_year_does_not_mean_issue_year(self):
+        ids = [r["notice_id"] for r in self.module.retrieve_context(
+            "latest registration of students notices 2026", top_k=5)]
+        self.assertEqual(ids, ["new"])
+
+    def test_semantic_retrieval_rejects_old_session_overlapping_year(self):
+        ids = [r["notice_id"] for r in self.module.retrieve_semantic(
+            "University notice for academic session 2026-27", top_k=5)]
+        self.assertEqual(ids, ["new"])
+
     def test_semantic_retrieval_does_not_fallback_wrong_session(self):
         answer = self.module.retrieve_semantic("2028-29 university circular", top_k=5)
         self.assertEqual(answer, [])
