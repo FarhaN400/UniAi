@@ -140,7 +140,11 @@ class MongoSessionStore:
                 "lease_token": token,
                 "lease_until": now + timedelta(seconds=self.lease_seconds),
             },
-            "$setOnInsert": {"created_at": now, "state": {}},
+            "$setOnInsert": {
+                "created_at": now,
+                "expires_at": now + timedelta(seconds=self.ttl_seconds),
+                "state": {},
+            },
         }
         try:
             doc = self.collection.find_one_and_update(
