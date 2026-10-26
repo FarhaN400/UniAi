@@ -8,6 +8,7 @@ import unittest
 from Module4.fee_utils import (
     answer_fee_question, labeled_fee_evidence, query_fee_kind,
 )
+from Module4.evidence import missing_amount_guidance
 
 
 def _record(raw_text="", *, amount=None, fee_type=None, key_points=None):
@@ -59,6 +60,19 @@ class FeeEvidenceTests(unittest.TestCase):
         r = _record(amount="500")
         self.assertEqual(labeled_fee_evidence(r, "application"), [])
         self.assertEqual(labeled_fee_evidence(r, "admission"), [])
+
+    def test_missing_amount_guidance_rejects_generic_admission_amount(self):
+        r = _record("Admission fee: Rs. 500.",
+                    amount="500", fee_type="admission")
+        answer = missing_amount_guidance("What is the application fee?", r)
+        self.assertIn("couldn't find an application-fee amount", answer)
+        self.assertNotIn("500", answer)
+
+    def test_missing_amount_guidance_defers_when_application_fee_exists(self):
+        r = _record("Application fee: Rs. 200. Admission fee: Rs. 500.")
+        self.assertIsNone(
+            missing_amount_guidance("What is the application fee?", r)
+        )
 
     def test_structured_explicit_label_fallback(self):
         r = _record(key_points=["Application fee is INR 150, payable online."])
