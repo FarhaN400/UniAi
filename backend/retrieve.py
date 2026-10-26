@@ -779,13 +779,26 @@ def _question_scope_matches(question, record):
         sd.get("summary"), sd.get("action_required"),
     )).casefold()
     text = primary + " " + secondary
-    # JELET-2025 issue-date and eligibility questions must identify a
-    # JELET-specific circular, not the issue date of an unrelated generic
-    # lateral-registration notice that lists JELET among its audiences.
-    if re.search(r"\bjelet\b", q) and re.search(
-        r"\b(?:issue\s+date|date\s+of\s+issue|issued|eligib|criteria)\w*\b", q
-    ) and not re.search(r"\bjelet\b", primary):
-        return False
+    # Strict PDF-subject identity for JELET-specific facts. The MAKAUT
+    # announcement label may advertise "JELET/JECA Phase-1" even when the
+    # extracted PDF's own title is only "B.Tech Lateral and MCA Lateral
+    # Registration". Combining BOTH titles into one string previously let
+    # that generic registration PDF answer Q17 (JELET issue date) and Q24
+    # (JELET eligibility). For such requests, the extracted document title
+    # takes precedence over the website listing; a conflict fails closed.
+    explicit_jelet_fact = bool(
+        re.search(r"\bjelet\b", q)
+        and re.search(
+            r"\b(?:issue\s+date|date\s+of\s+issue|issued|"
+            r"eligib\w*|criteria)\b", q
+        )
+    )
+    if explicit_jelet_fact:
+        extracted_title = str(sd.get("title") or "").casefold().strip()
+        website_title = str(record.get("title") or "").casefold().strip()
+        subject_title = extracted_title or website_title
+        if not re.search(r"\bjelet\b", subject_title):
+            return False
     # A request for student-registration notices is NOT a search for any
     # document that happens to say "registering students" in its summary.
     # First require that student registration is the actual notice subject.
