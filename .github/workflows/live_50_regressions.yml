@@ -8,6 +8,8 @@ on:
       - backend/Module4/document_utils.py
       - backend/notice_quality.py
       - backend/tests/test_live_50_fixes.py
+      - backend/tests/test_final_live_batch.py
+      - backend/Module4/query_understanding.py
       - .github/workflows/live_50_regressions.yml
   push:
     branches: [fix/live-evaluation-50-batch]
@@ -22,6 +24,10 @@ jobs:
           python-version: '3.11'
       - name: Check Python syntax
         run: python -m py_compile backend/retrieve.py backend/Module4/main.py backend/Module4/document_utils.py backend/notice_quality.py
+      - name: Final 50-question bug-batch regressions
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_final_live_batch.py' -v
       - name: Regression tests for live failures
         env:
           PYTHONPATH: backend
