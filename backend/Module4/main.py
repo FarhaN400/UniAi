@@ -1137,12 +1137,24 @@ def _field_answer(question, record, field=None):
                     f"Check the PDF to confirm which action it applies to.\n{source}")
         return f"I could not verify a deadline from this notice's extracted details.\n{source}"
     if field == "fees" or re.search(r"\b(?:application\s+fee|fees?|charges?)\b", lower):
+        if (re.search(r"\bboth\b", lower) and
+                re.search(r"\bapplication\s+fees?\b", lower) and
+                re.search(r"\badmission\s+fees?\b", lower)):
+            from Module4.fee_utils import labeled_fee_evidence
+            named = [kind for kind in ("application", "admission")
+                     if labeled_fee_evidence(record, kind)]
+            if len(named) == 2:
+                return (f"Both application-fee and admission-fee amounts have "
+                        f"directly labelled evidence in '{title}'.\n{source}")
+            return (f"I cannot verify both fee categories in '{title}' from "
+                    f"directly labelled evidence. Finding one category does "
+                    f"not establish the other.\n{source}")
         return answer_fee_question(question, record, source, title)
     if field == "documents":
-        return answer_document_question(record, title, source)
+        return answer_document_question(record, title, source, question=question)
     if field in ("eligibility", "procedure", "location", "time", "contact"):
         expressions = {
-            "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2)\b",
+            "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2|caste|category|reserved|sc|st|obc|ews|pwd|reservation)\b",
             "procedure": r"\b(?:apply|application|registration|submit|submission|portal|steps?|report(?:ing)?|procedure|process)\b",
             "location": r"\b(?:campus|building|venue|room|location|reporting\s+(?:at|venue)|salt\s+lake|haringhata)\b",
             "time": r"\b(?:reopen|leave|closing|closure|time|timing|schedule|hours?|a\.m\.|p\.m\.|date)\b",
@@ -1449,6 +1461,15 @@ def ask_uniai(question, state=None):
     if _out_of_scope(question):
         return _save_reply(st, question, "I only answer questions about MAKAUT university notices. "
                            "Please ask about admissions, exams, hostels, registration or other notices.")
+    if (re.search(r"\bapplication\s+fee\b", question, re.I)
+            and re.search(r"\bonly\s+states?\s+(?:an?\s+)?admission\s+fee\b",
+                          question, re.I)):
+        return _save_reply(
+            st, question,
+            "If a notice states only an admission fee, that is not evidence "
+            "of an application fee. I cannot infer an application-fee amount "
+            "without a separately labelled official source."
+        )
 
     # Avoid a Groq classification API call for deterministic student queries.
     # Opt-in classifier remains available for experiments without breaking
@@ -1608,6 +1629,19 @@ def ask_uniai(question, state=None):
         if direct is not None:
             text, record = direct
             return _save_reply(st, question, text, records=[record], active=record)
+        if getattr(parsed, "requested_field", None) == "documents":
+            # No globally valid checklist exists for unspecified university
+            # processes. Ask the student to identify the actual notice.
+            options = "\n".join(
+                f"- {_record_heading(r)}\n  {_record_source(r)}"
+                for r in records[:3]
+            )
+            return _save_reply(
+                st, question,
+                "Document requirements vary by notice, course and admission "
+                "round. Please identify which official circular you mean:\n"
+                + options, records=records[:3],
+            )
 
     if _is_list_request(question, parsed) or is_pure_latest or issue_date is not None:
         content = (format_notice_list(records) if len(records) > 1
