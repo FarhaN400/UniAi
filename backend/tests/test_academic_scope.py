@@ -8,7 +8,6 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from academic_scope import (
     academic_sessions, requested_session, matches_session,
@@ -174,11 +173,24 @@ def import_retrieve_offline(rows):
     fake_pymongo.MongoClient = FakeClient
     stub_modules = {"dotenv": fake_dotenv, "pinecone": fake_pinecone,
                     "pymongo": fake_pymongo}
-    with patch.dict(sys.modules, stub_modules):
+    # Do not use patch.dict(sys.modules) here: it restores the whole modules
+    # dictionary snapshot, evicting e.g. newly imported _zoneinfo C extensions.
+    # Some Python versions then crash in interpreter shutdown (none_dealloc).
+    # Restore only our three exact stub entries.
+    missing = object()
+    previous = {name: sys.modules.get(name, missing) for name in stub_modules}
+    try:
+        sys.modules.update(stub_modules)
         path = Path(__file__).resolve().parents[1] / "retrieve.py"
         spec = importlib.util.spec_from_file_location("_test_academic_retrieve", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+    finally:
+        for name, value in previous.items():
+            if value is missing:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
     return module
 
 
