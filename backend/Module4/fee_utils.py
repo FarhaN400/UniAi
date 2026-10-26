@@ -27,18 +27,19 @@ _BOUNDARY = re.compile(r";+|(?<=[.!?])\s+(?=[A-Z])")
 
 
 def query_fee_kind(question):
-    """Only infer a fee type when the student names it unambiguously."""
+    """Return a single explicitly requested category (or None for comparisons)."""
     query = str(question or "")
-    if re.search(r"\bapplication[\s-]*fees?\b|\bfees?\s+for\s+(?:an?\s+)?application\b", query, re.I):
-        return "application"
-    if re.search(r"\badmission[\s-]*fees?\b|\bfees?\s+for\s+admission\b", query, re.I):
-        return "admission"
-    if re.search(r"\bregistration[\s-]*fees?\b", query, re.I):
-        return "registration"
-    if re.search(r"\b(?:exam|examination)[\s-]*fees?\b", query, re.I):
-        return "examination"
-    return None
-
+    patterns = (
+        ("application", r"\bapplication[\s-]*fees?\b|\bfees?\s+for\s+(?:an?\s+)?application\b"),
+        ("admission", r"\badmission[\s-]*fees?\b|\bfees?\s+for\s+admission\b"),
+        ("registration", r"\bregistration[\s-]*fees?\b"),
+        ("examination", r"\b(?:exam|examination)[\s-]*fees?\b"),
+        ("tuition", r"\btuition[\s-]*fees?\b"),
+        ("processing", r"\bprocessing[\s-]*fees?\b"),
+        ("counselling", r"\b(?:counselling|counseling)[\s-]*fees?\b"),
+    )
+    matches = [kind for kind, pattern in patterns if re.search(pattern, query, re.I)]
+    return matches[0] if len(matches) == 1 else None
 
 def _sections(text):
     """Split clauses without crossing from one fee sentence into another."""
@@ -108,6 +109,9 @@ def labeled_fee_evidence(record, kind):
     results = []
     seen = set()
     for text in text_sources:
+        if re.search(r"\brequir(?:es?|ing)\s+verification\b", str(text or ""), re.I):
+            # Merged chunks explicitly flagged these values as unverified.
+            continue
         for quote, amount in _directly_labeled_fee(text, kind):
             key = (amount.casefold(), " ".join(quote.casefold().split()))
             if key not in seen:
