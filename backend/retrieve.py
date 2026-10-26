@@ -770,7 +770,13 @@ def _question_scope_matches(question, record):
     if re.search(r"\bholidays?\b", q):
         if not re.search(r"\b(?:holidays?|puja|vacation|hostel\s+clos(?:ure|ed)|campus\s+clos(?:ure|ed))\b", primary):
             return False
-    if re.search(r"\b(?:placements?|recruitment)\b", q):
+    # A question about placement salary *within a WBJEE notice* is
+    # a requested fact, not a search for recruitment announcements.
+    placement_as_field = bool(
+        re.search(r"\b(?:salary|package|lpa)\b", q)
+        and set(detect_search_topics(question)) & set(ADMISSION_TOPICS)
+    )
+    if re.search(r"\b(?:placements?|recruitment)\b", q) and not placement_as_field:
         if not re.search(r"\b(?:placements?|recruitment|campus\s+drives?|career\s+fair|training\s+and\s+placement|tpo)\b", primary):
             return False
     if re.search(r"\b(?:document\s+verification|verification\s+and\s+admission)\b", q):
