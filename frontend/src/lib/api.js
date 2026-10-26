@@ -10,7 +10,7 @@ const sampleSources = [{
   date: 'Current Session'
 }];
 
-export async function askUniAI(question, conversationId) {
+export async function askUniAI(question, conversationId, requestId = null) {
   if (!BASE) {
     return {
       answer: `UniAI is running in frontend demo mode. You asked: “${question}”\n\nTo use official MAKAUT notices, configure VITE_API_BASE_URL to the deployed FastAPI backend URL. University notice board: https://makautwb.ac.in/page.php?id=340`,
@@ -27,7 +27,11 @@ export async function askUniAI(question, conversationId) {
     const response = await fetch(`${BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, conversation_id: conversationId }),
+      body: JSON.stringify({
+        question,
+        conversation_id: conversationId,
+        ...(requestId ? { request_id: requestId } : {})
+      }),
       signal: controller.signal
     });
     if (!response.ok) {

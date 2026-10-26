@@ -26,9 +26,11 @@ jobs:
       ATLAS_PROJECT_ID: ${{ vars.ATLAS_PROJECT_ID }}
       LLM_PROVIDER: groq
       GROQ_MODEL: openai/gpt-oss-20b
-      SYNC_PROCESS_LIMIT: "1"
-      SYNC_INDEX_LIMIT: "1"
-      SYNC_RECHECK_EXISTING: "0"
+      # Eight scheduled runs/day: bounded catch-up instead of a single notice.
+      SYNC_PROCESS_LIMIT: "3"
+      SYNC_INDEX_LIMIT: "10"
+      # Rotating SHA-256 spot-checks of same-URL revisions.
+      SYNC_RECHECK_EXISTING: "3"
       SYNC_MAX_ATTEMPTS: "4"
       AUTO_APPROVE_LONG_NOTICES: "0"
 

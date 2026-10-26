@@ -17,7 +17,7 @@ import SourcePanel from '../components/SourcePanel';
 import FormattedMessage, { extractUrlsFromText } from '../components/FormattedMessage';
 import { getLatestAssistantMessage, getSourcesForMessage } from '../lib/sources';
 
-export default function Chat({ chat, onSend, loading, error }) {
+export default function Chat({ chat, onSend, onRetry, loading, error }) {
   const [open, setOpen] = useState(false);
   const [selectedSourceMessageId, setSelectedSourceMessageId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
@@ -25,6 +25,9 @@ export default function Chat({ chat, onSend, loading, error }) {
   const bottom = useRef(null);
 
   const messages = chat?.messages || [];
+  const pendingUserMessage = messages.at(-1)?.role === 'user'
+    ? messages.at(-1)
+    : null;
   // Sources always belong to one assistant response, never an earlier
   // answer selected merely because it had nonempty citations.
   const latestAssistant = getLatestAssistantMessage(messages);
@@ -248,12 +251,9 @@ export default function Chat({ chat, onSend, loading, error }) {
                 <div className="flex-1">
                   <div className="font-bold text-red-900 dark:text-red-100">Request Error</div>
                   <div className="mt-1">{error}</div>
-                  {messages.length > 0 && (
+                  {pendingUserMessage && (
                     <button
-                      onClick={() => {
-                        const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-                        if (lastUserMsg) onSend(lastUserMsg.text);
-                      }}
+                      onClick={() => onRetry?.(pendingUserMessage.text, pendingUserMessage.id)}
                       className="mt-2.5 inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 hover:bg-red-200 dark:bg-red-900/50 dark:hover:bg-red-800/60 text-red-800 dark:text-red-200 rounded-lg font-semibold transition"
                     >
                       <RotateCcw size={12} /> Retry last query

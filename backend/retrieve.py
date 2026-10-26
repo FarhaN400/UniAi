@@ -439,7 +439,9 @@ def retrieve_semantic(question, top_k=5):
         })
         for record in cursor:
             nid = record.get("notice_id")
-            if nid:
+            # During revision re-extraction, an older Pinecone vector may
+            # still exist. Do not rank it until the new content is indexed.
+            if nid and record.get("pinecone_indexed") is not False:
                 records_by_id[nid] = record
 
     # Optional lexical discovery: use identifiers first, not arbitrary set order.

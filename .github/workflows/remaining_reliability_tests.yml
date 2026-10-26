@@ -1,0 +1,60 @@
+name: UniAI Remaining Reliability Regressions
+
+on:
+  pull_request:
+    paths:
+      - 'backend/session_persistence.py'
+      - 'backend/app.py'
+      - 'backend/Module4/conversation_state.py'
+      - 'backend/Module1/scrapper.py'
+      - 'backend/Module3/main.py'
+      - 'backend/retrieve.py'
+      - 'backend/scheduler/sync_notices.py'
+      - 'backend/tests/test_remaining_bugs.py'
+      - 'backend/evaluation/questions_50.json'
+      - 'backend/evaluation/run_50.py'
+      - '.github/workflows/notice_sync.yml'
+      - '.github/workflows/remaining_reliability_tests.yml'
+      - 'frontend/src/App.jsx'
+      - 'frontend/src/pages/Chat.jsx'
+      - 'frontend/src/lib/api.js'
+      - 'frontend/src/lib/storage.js'
+      - 'frontend/src/lib/retry.js'
+      - 'frontend/tests/retry.test.mjs'
+  push:
+    branches:
+      - 'fix/remaining-9-12-reliability'
+
+jobs:
+  backend-reliability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Compile changed Python files
+        run: |
+          python -m py_compile backend/app.py backend/session_persistence.py             backend/Module4/conversation_state.py backend/Module1/scrapper.py             backend/Module3/main.py backend/retrieve.py backend/scheduler/sync_notices.py backend/evaluation/run_50.py
+      - name: Offline regression suite (no API keys)
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_remaining_bugs.py' -v
+
+  frontend-reliability:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Retry and existing source attribution tests
+        run: node --test tests/retry.test.mjs tests/sources.test.mjs
+      - name: Vite production build
+        run: npm run build

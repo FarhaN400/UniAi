@@ -7,6 +7,7 @@ import History from './pages/History';
 import Settings from './pages/Settings';
 import { loadChats, saveChats, getTheme, saveTheme, makeId } from './lib/storage';
 import { askUniAI, demoMode } from './lib/api';
+import { isPendingRetry } from './lib/retry';
 
 export default function App() {
   const [page, setPage] = useState('home');
@@ -54,14 +55,21 @@ export default function App() {
     }
   }
 
-  async function send(question) {
+  async function send(question, options = {}) {
     if (loading) return;
-    setError('');
-
+    const retryMessageId = options?.retryMessageId || null;
+    const isRetry = Boolean(retryMessageId);
     const id = activeId || makeId();
     const isNew = !activeId;
+
+    if (isRetry) {
+      const current = chats.find(c => c.id === id);
+      if (!isPendingRetry(current, question, retryMessageId)) return;
+    }
+
+    setError('');
     const message = {
-      id: makeId(),
+      id: retryMessageId || makeId(),
       role: 'user',
       text: question,
       timestamp: Date.now()
@@ -70,33 +78,27 @@ export default function App() {
     setActiveId(id);
     setPage('chat');
 
-    setChats(prev =>
-      isNew
-        ? [
-            {
+    // Retry uses the already-visible user message and its original request_id.
+    if (!isRetry) {
+      setChats(prev =>
+        isNew
+          ? [{
               id,
               title: question.slice(0, 49),
               createdAt: Date.now(),
               updatedAt: Date.now(),
               messages: [message]
-            },
-            ...prev
-          ]
-        : prev.map(c =>
-            c.id === id
-              ? {
-                  ...c,
-                  updatedAt: Date.now(),
-                  messages: [...c.messages, message]
-                }
-              : c
-          )
-    );
+            }, ...prev]
+          : prev.map(c => c.id === id
+              ? { ...c, updatedAt: Date.now(), messages: [...c.messages, message] }
+              : c)
+      );
+    }
 
     setLoading(true);
 
     try {
-      const result = await askUniAI(question, id);
+      const result = await askUniAI(question, id, message.id);
 
       setChats(prev =>
         prev.map(c =>
@@ -172,7 +174,13 @@ export default function App() {
         )}
         {page === 'chat' && (
           <main className="min-h-0 flex-1">
-            <Chat chat={activeChat} onSend={send} loading={loading} error={error} />
+            <Chat
+              chat={activeChat}
+              onSend={send}
+              onRetry={(text, messageId) => send(text, { retryMessageId: messageId })}
+              loading={loading}
+              error={error}
+            />
           </main>
         )}
         {page === 'history' && (
