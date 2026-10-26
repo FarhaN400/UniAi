@@ -2,6 +2,8 @@ import re
 from datetime import date, datetime
 from urllib.parse import urlparse
 
+from Module4.fee_utils import labeled_fee_evidence
+
 
 _ROUND_WORDS = {
     "first": 1,
@@ -375,16 +377,9 @@ def _has_stated_amount(record, category):
     data = record.get("structured_data") or {}
     fees = data.get("fees") or {}
     if category == "application":
-        candidates = [data.get("application_fee"), data.get("application_fee_amount")]
-        if isinstance(fees, dict):
-            candidates += [fees.get("application_fee"), fees.get("application_fee_amount")]
-            # The generic field is ambiguous, so do not conclude it is absent.
-            candidates.append(fees.get("amount"))
-        if any(_known_value(v) for v in candidates):
-            return True
-        source = " ".join([str(record.get("raw_text") or ""),
-                           " ".join(value for _, value in _flatten_fields(data))])
-        name = r"application[\s-]*fees?"
+        # A legacy fees.amount may be an admission fee. Only a directly
+        # labelled amount can establish application-fee evidence.
+        return bool(labeled_fee_evidence(record, "application"))
     else:
         candidates = [data.get(k) for k in (
             "guaranteed_placement", "placement_package", "guaranteed_package",
