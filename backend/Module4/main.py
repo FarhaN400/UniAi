@@ -1199,7 +1199,11 @@ def _is_list_request(question, parsed=None):
     # eligibility" requests notice results even though a field was detected.
     if getattr(parsed, "requested_field", None):
         return plural_notice_request
-    return generic_notice_request or plural_notice_request
+    temporal_list = bool(re.search(
+        r"\b(?:latest|recent|new|most\s+recent)\b[^.!?]{0,70}\b(?:notices|notifications|circulars)\b",
+        lower,
+    ))
+    return generic_notice_request or plural_notice_request or temporal_list
 
 
 def _is_single_target(question, parsed):
@@ -1418,7 +1422,8 @@ def ask_uniai(question, state=None):
             return _save_reply(st, question, "Notice comparison is temporarily unavailable. Please retry.")
 
     # Chronological global requests do not hit Pinecone or Groq.
-    is_pure_latest = parsed.intent in ("latest_notices", "today_notices", "yesterday_notices") and not named_topics
+    is_pure_latest = (parsed.intent in ("latest_notices", "today_notices", "yesterday_notices")
+                      and not named_topics and not explicit_year)
     issue_date = _requested_issue_date_any_position(question)
     topic_specific = bool(named_topics)
     try:
