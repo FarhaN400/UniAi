@@ -1259,6 +1259,131 @@ def _safe_grounded_answer(question, records, st, *, preserve=False):
     return answer
 
 
+def _preferred_evidence_record(question, records):
+    """Choose a clearly relevant notice, not a generic recent vector hit.
+
+    Do not claim that one round's checklist or deadlines apply to all rounds.
+    The selected source remains explicit in the returned answer.
+    """
+    q = str(question or "").casefold()
+    def score(item):
+        text = _record_heading(item).casefold()
+        weight = 0
+        if re.search(r"\breopen(?:ing|s|ed)?\b", q):
+            weight += 30 if "hostel" in text and "clos" in text else 0
+        if re.search(r"\b(?:reporting instructions?|admission reporting)\b", q):
+            weight += 30 if re.search(r"\breport(?:ing)?\b|\bverific", text) else 0
+        if re.search(r"\b(?:documents?|verific|marksheets?|photocop)", q):
+            weight += 18 if re.search(r"\bverific|\ballottees?\b", text) else 0
+        if re.search(r"\b(?:registration of students?|students? registration)\b", q):
+            weight += 20 if "registration" in text and (
+                "student" in text or "admitted" in text
+            ) else 0
+        if re.search(r"\b(?:eligibility|eligible)\b", q):
+            weight += 8 if re.search(r"\b(?:eligib|admission)\b", text) else 0
+        return weight
+    return max(enumerate(records), key=lambda pair: (
+        score(pair[1]), -pair[0]
+    ))[1]
+
+
+def _direct_fact_answer(question, records, parsed):
+    """Return (answer, supporting_notice) when a sourced deterministic
+    response is safer than an unreliable multi-document LLM call.
+    """
+    if not records:
+        return None
+    q = str(question or "").casefold()
+    field = getattr(parsed, "requested_field", None)
+    # These must remain evidence questions, not inferred generic policies.
+    if not field and re.search(r"\breopen(?:ing|s|ed)?\b", q):
+        field = "time"
+    if not field and re.search(r"\breporting instructions?\b", q):
+        field = "procedure"
+    if not field and re.search(r"\bdocuments?\b|\bphotocop(?:y|ies)\b", q):
+        field = "documents"
+    if not field and re.search(r"\b(?:eligible|eligibility)\b", q):
+        field = "eligibility"
+    target = _preferred_evidence_record(question, records)
+
+    # A single identified notice can answer an academic-session identity
+    # question directly from its title; do not ask Groq to guess the session.
+    if re.search(r"\bwhich academic session\b|\bwhat academic session\b", q):
+        title = _record_heading(target)
+        m = re.search(r"\b(20\d{2})\s*[-/–]\s*(?:20)?(\d{2})\b", title)
+        if m:
+            return (f"The notice '{title}' concerns academic session "
+                    f"{m.group(1)}-{m.group(2)}.\n{_record_source(target)}", target)
+
+    if field in ("documents", "fees", "deadline", "eligibility", "procedure",
+                 "issue_date", "reference_number", "location", "time", "contact", "source"):
+        # Unscoped checklist queries may refer to several different notices.
+        # Returning one institution-wide checklist would be misleading.
+        if (len(records) > 1 and field == "documents" and not re.search(
+            r"\b(?:wbjee|wbjeeb|jelet|jeca|pget|cet|registration|hostel|"
+            r"this|that|the\s+notice)\b", q
+        )):
+            return None
+
+        # Which JELET-2025 circular? There may be several different rounds.
+        if field == "issue_date" and len(records) > 1 and re.search(
+            r"\bjelet\b.*\b20\d{2}\b", q
+        ) and not re.search(r"\b(?:round|phase|dated)\b", q):
+            choices = "\n".join(
+                f"- {_record_heading(item)} ({(item.get('structured_data') or {}).get('issue_date') or 'date unverified'})"
+                for item in records[:4]
+            )
+            return (f"There are multiple JELET notices for this year. "
+                    f"Which notice's issue date do you mean?\n{choices}\n"
+                    f"{_record_source(target)}", target)
+
+        answer = _field_answer(question, target, field)
+        if answer is not None:
+            if len(records) > 1 and field == "documents":
+                answer += ("\nNote: Requirements can vary by admission round. "
+                           "This answer applies to the cited notice only.")
+            return answer, target
+    return None
+
+
+def _compare_hostel_and_holiday(question, st):
+    """Compare distinct kinds of Puja notices without merging their dates."""
+    q = str(question or "").casefold()
+    if not (re.search(r"\bcompar", q) and "hostel" in q
+            and re.search(r"\bholiday|puja", q)):
+        return None
+    from retrieve import retrieve_filtered_notices
+    found, sections = [], []
+    for label, query in (
+        ("Hostel closure", "hostel closure during Durga Puja"),
+        ("University holiday", "university holiday during Durga Puja"),
+    ):
+        matches = retrieve_filtered_notices(query, top_k=3, sort_latest=True)
+        # Broad holiday searches can include hostel notices; the two sources
+        # must remain genuinely distinct.
+        if label == "University holiday":
+            matches = [r for r in matches if not re.search(
+                r"\bhostel\b", _record_heading(r), re.I
+            )]
+        if not matches:
+            sections.append(f"{label}: No matching processed notice was verified.")
+            continue
+        notice = matches[0]
+        data = notice.get("structured_data") or {}
+        summary, warning = display_summary(notice)
+        description = str(summary or data.get("action_required") or "").strip()
+        if warning:
+            description = warning
+        sections.append(
+            f"{label}: {_record_heading(notice)}\n"
+            + (f"{description[:700]}\n" if description else "")
+            + _record_source(notice)
+        )
+        found.append(notice)
+    return _save_reply(st, question, "\n\n".join(sections),
+                       records=found, active=None)
+
+
 def _comparison_notice_answer(question, st):
     """Compare distinct years without allowing the first year to filter both."""
     from retrieve import retrieve_filtered_notices
@@ -1285,9 +1410,16 @@ def _comparison_notice_answer(question, st):
     lines = []
     for label, record in found:
         sd = record.get("structured_data") or {}
-        details = [str(p) for p in sd.get("key_points") or [] if re.search(
-            r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
-        )]
+        if re.search(r"\b(?:deadlines?|reporting dates?|last dates?)\b", question, re.I):
+            extracted_dates = sd.get("important_dates") or {}
+            raw_last = extracted_dates.get("last_date") if isinstance(extracted_dates, dict) else None
+            details = ([f"Extracted last date: {raw_last}. Verify its purpose "
+                        f"(reporting versus application) against the PDF."] if raw_last
+                       else ["The matching notice has no reliably identified reporting deadline."])
+        else:
+            details = [str(p) for p in sd.get("key_points") or [] if re.search(
+                r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
+            )]
         if not details:
             details = [str(sd.get("summary") or "No matching details extracted")]
         lines.append(f"{label} — {_record_heading(record)}")
@@ -1422,6 +1554,9 @@ def ask_uniai(question, state=None):
 
     if re.search(r"\b(?:compare|comparison|difference\s+between)\b", question, re.I):
         try:
+            compared = _compare_hostel_and_holiday(question, st)
+            if compared is not None:
+                return compared
             compared = _comparison_notice_answer(question, st)
             if compared is not None:
                 return compared
@@ -1465,6 +1600,14 @@ def ask_uniai(question, state=None):
         else:
             reply = _no_matches(question)
         return _save_reply(st, question, reply, records=[])
+
+    if (len(records) > 1 and not is_pure_latest
+            and not _is_list_request(question, parsed)
+            and issue_date is None):
+        direct = _direct_fact_answer(question, records, parsed)
+        if direct is not None:
+            text, record = direct
+            return _save_reply(st, question, text, records=[record], active=record)
 
     if _is_list_request(question, parsed) or is_pure_latest or issue_date is not None:
         content = (format_notice_list(records) if len(records) > 1
