@@ -191,7 +191,7 @@ def _structured_document_fallback(sd):
     return found[:25]
 
 
-def answer_document_question(record, title, source):
+def answer_document_question(record, title, source, question=None):
     """Return a grounded, source-linked list, or an explicit uncertainty answer.
 
     Prefer source PDF OCR, including names absent from old structured JSON.
@@ -203,9 +203,29 @@ def answer_document_question(record, title, source):
     if raw.strip():
         documents, instructions = _extract_named_lines(raw)
         if documents:
+            # When the student asks about ONE named document, show its exact
+            # excerpt and qualifiers rather than burying it in a large list.
+            # Avoid a universal yes/no answer across different admission rounds.
+            q = str(question or "").casefold()
+            sought = None
+            if re.search(r"\bdomicile\b", q):
+                sought = r"\b(?:domicile|residen(?:ce|tial))\b"
+            elif re.search(r"\b(?:self[- ]?attested|photocop(?:y|ies)|xerox)\b", q):
+                sought = r"\b(?:self[- ]?attested|photocop(?:y|ies)|xerox)\b"
+            elif re.search(r"\b(?:class\s*10|class\s*12|marksheets?|mark\s*sheets?)\b", q):
+                sought = r"\b(?:mark[\s-]*sheets?|class\s*10|class\s*12)\b"
+            selected = documents
+            if sought:
+                matches = [item for item in [*documents, *instructions]
+                           if re.search(sought, item, re.I)]
+                if not matches:
+                    return (f"I couldn't verify that specific document "
+                            f"requirement from the available extracted text of "
+                            f"'{title}'. Please check the original notice.\n{source}")
+                selected = list(dict.fromkeys(matches))[:8]
             output = [
                 f"Document requirements found in the extracted PDF text for '{title}':",
-                *(f"- {item}" for item in documents),
+                *(f"- {item}" for item in selected),
             ]
             if instructions:
                 output.append("Additional instructions from the same PDF:")
