@@ -715,9 +715,13 @@ def _search_topic_matches(record, topics):
         if identity_exams:
             return bool(identity_exams & requested_exams)
 
-        # No exam named in either title. Audience can establish identity,
-        # but not if it identifies a different exam; else use summary.
+        # No exam named in either title. JELET and JECA are distinct entrance
+        # exams and cannot be inferred from generic B.Tech/MCA lateral
+        # registration notices: the notice must name that entrance exam in
+        # its title or have an unambiguous exam-specific target audience.
         audience_exams = _exam_topics_in_text(sd.get("target_audience"))
+        if requested_exams & {"jelet", "jeca"}:
+            return bool(audience_exams & requested_exams)
         if audience_exams:
             return bool(audience_exams & requested_exams)
         return any(
@@ -725,10 +729,36 @@ def _search_topic_matches(record, topics):
             for exam in requested_exams
         )
 
-    # Non-exam topic matching keeps the existing broader semantics.
-    return any(_phrase_regex(SEARCH_TOPICS[topic]).search(primary)
-               for topic in topics) or any(
-        _phrase_regex(SEARCH_TOPICS[topic]).search(secondary)
+    # These subjects must actually be THE notice's subject. Previously a
+    # mention of "hostel" in an anti-ragging committee's key points, or of
+    # "scholarship" in a refund notice, polluted a latest-notice list.
+    title = " ".join(str(v or "") for v in (
+        record.get("title"), sd.get("title")
+    )).casefold()
+    title_scoped = {"hostel", "scholarship", "holiday", "exam"}
+    for topic in topics & title_scoped:
+        if topic == "hostel" and not re.search(r"\bhostels?\b", title):
+            return False
+        if topic == "scholarship" and not re.search(
+            r"\b(?:scholarships?|fellowships?|doctoral\s+fellowship|"
+            r"stipends?|financial\s+assistance)\b", title
+        ):
+            return False
+        if topic == "holiday" and not re.search(
+            r"\b(?:holidays?|puja|vacations?|closure|closed)\b", title
+        ):
+            return False
+        if topic == "exam" and not re.search(
+            r"\b(?:exams?|examinations?|semester|routines?|timetables?|"
+            r"time[ -]?tables?|schedule|programme|program)\b", title
+        ):
+            return False
+    # A query naming several subjects should not be satisfied by a single
+    # incidental mention of only one of them.
+    return all(
+        _phrase_regex(SEARCH_TOPICS[topic]).search(primary)
+        or (topic not in title_scoped
+            and _phrase_regex(SEARCH_TOPICS[topic]).search(secondary))
         for topic in topics
     )
 
@@ -770,6 +800,13 @@ def _question_scope_matches(question, record):
     if re.search(r"\bholidays?\b", q):
         if not re.search(r"\b(?:holidays?|puja|vacation|hostel\s+clos(?:ure|ed)|campus\s+clos(?:ure|ed))\b", primary):
             return False
+    # Generic "2026 admission notice" should not silently choose a fee
+    # refund/withdrawal notice or an unrelated admissions administration item.
+    if re.search(r"\b(?:admission\s+notice|admission\s+notices)\b", q):
+        if re.search(r"\b(?:refund|withdrawal|cancellation)\b", primary) and not re.search(
+            r"\b(?:refund|withdrawal|cancellation)\b", q
+        ):
+            return False
     # A question about placement salary *within a WBJEE notice* is
     # a requested fact, not a search for recruitment announcements.
     placement_as_field = bool(
@@ -792,14 +829,17 @@ def _question_scope_matches(question, record):
                 r"\b(?:admission|counselling|counseling|reporting)\b", primary):
             return False
 
-    # A routine/timetable is a subject, not incidental usage of 'exam'
-    # or the word 'date' in an admission/registration notice.
+    # A general examination routine search must not return an unrelated
+    # PhD RPE *course* schedule. Explicit RPE/PhD queries are still allowed.
     if re.search(r"\b(?:routines?|time[ -]?tables?|exam(?:ination)?\s+schedules?)\b", q):
         if not re.search(
             r"\b(?:routines?|time[ -]?tables?|exam(?:ination)?\s+schedules?|"
             r"examination\s+programmes?|exam\s+programmes?)\b", primary
         ):
             return False
+        if not re.search(r"\b(?:phd|ph\.d\.?|rpe|research\s+scholars?)\b", q):
+            if re.search(r"\b(?:phd|ph\.d\.?|rpe|research\s+scholars?)\b", primary):
+                return False
     elif (re.search(r"\b(?:exam|examination|semester)\b", q)
             and re.search(r"\bschedules?\b", q)):
         if not re.search(r"\b(?:schedules?|routines?|timetables?|exam\s+programmes?)\b", primary):
@@ -809,6 +849,17 @@ def _question_scope_matches(question, record):
     if re.search(r"\badmission\s+reporting\b|\breporting\s+instructions?\b", q):
         if not re.search(r"\b(?:report(?:ing)?|physical\s+verification|"
                          r"document\s+verification|allottees?)\b", primary):
+            return False
+    # "Durga Puja" and "Viswakarma Puja" are distinct holidays. Hard
+    # festival identity prevents plausible-looking but unrelated citations.
+    if re.search(r"\bdurga\s+puja\b", q):
+        if not re.search(r"\bdurga\s+puja\b", primary):
+            return False
+    # Do not replace a hostel *closure* circular with an allotment notice.
+    if re.search(r"\bhostels?\s+clos(?:ure|ing|ed)\b", q):
+        if not re.search(r"\bhostels?\b", primary) or not re.search(
+            r"\b(?:closure|closing|closed|vacate)\b", primary
+        ):
             return False
     # University holiday ≠ hostel closure, even when both involve Durga Puja.
     if re.search(r"\b(?:university|academic|official)\s+holidays?\b", q):

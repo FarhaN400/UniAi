@@ -468,9 +468,9 @@ def _explicit_temporal_notice_request(text):
         return None
     if not re.search(r"\b(?:notices?|notifications?|circulars?)\b", lower):
         return None
-    if re.search(r"\b(?:today'?s|published\s+today|came\s+today)\b", lower):
+    if re.search(r"\b(?:today'?s|(?:published|issued|released|came)\s+today)\b", lower):
         return "today_notices"
-    if re.search(r"\b(?:yesterday'?s|published\s+yesterday|came\s+yesterday)\b", lower):
+    if re.search(r"\b(?:yesterday'?s|(?:published|issued|released|came)\s+yesterday)\b", lower):
         return "yesterday_notices"
     if re.search(r"\b(?:latest|recent|most\s+recent)\b", lower):
         return "latest_notices"

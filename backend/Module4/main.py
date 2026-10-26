@@ -1160,7 +1160,47 @@ def _field_answer(question, record, field=None):
         return answer_fee_question(question, record, source, title)
     if field == "documents":
         return answer_document_question(record, title, source, question=question)
-    if field in ("eligibility", "procedure", "location", "time", "contact"):
+    if field == "eligibility":
+        # "eligible candidates should complete registration" is NOT an
+        # eligibility criterion. Require a condition, qualification, category
+        # rule or minimum threshold in the same extracted statement.
+        eligibility_signal = re.compile(
+            r"\b(?:must\s+(?:have|possess|pass)|passed|"
+            r"minimum|at\s+least|qualification|diploma|degree|"
+            r"10\+2|12th|graduate|percentage|"
+            r"subject\s+combination|reserved\s+categor|"
+            r"sc/st|obc|ews|non.creamy|pwd|"
+            r"eligib(?:ility|le)\s+(?:if|only|when|criteria|requirements?))\b",
+            re.I,
+        )
+        candidates = [
+            _plain(v) for v in [sd.get("action_required"),
+                                *(sd.get("key_points") or [])]
+            if v and eligibility_signal.search(_plain(v))
+        ]
+        # The existence of a caste-document checklist alone does not prove
+        # a category-based admission eligibility rule.
+        if re.search(r"\b(?:reserved.category|reservation)\b", lower):
+            explicit_criteria = [v for v in candidates if re.search(
+                r"\b(?:eligib|criteria|minimum|admissi(?:on|ble)|quota|"
+                r"reserved\s+seats?)\b", v, re.I
+            ) and not re.search(r"\b(?:carry|bring|certificate|photocop|"
+                                r"original\s+document)\b", v, re.I)]
+            if not explicit_criteria:
+                return (f"I found category-certificate/document-verification "
+                        f"instructions in '{title}', but cannot confirm "
+                        f"separate reserved-category eligibility criteria from "
+                        f"the extracted notice. Consult the original PDF.\n{source}")
+            candidates = explicit_criteria
+        if not candidates:
+            return (f"I couldn't verify specific eligibility criteria from "
+                    f"the extracted details of '{title}'. Statements that "
+                    f"'eligible candidates may register' do not establish "
+                    f"who qualifies. Check the official PDF.\n{source}")
+        return (f"Eligibility evidence extracted from '{title}':\n"
+                + "\n".join(f"- {value[:700]}" for value in candidates[:7])
+                + f"\nPlease verify conditions in the official notice.\n{source}")
+    if field in ("procedure", "location", "time", "contact"):
         expressions = {
             "eligibility": r"\b(?:eligible|eligibility|qualification|compulsory|mandatory|subjects?|percentage|marks|criteria|12th|10\+2|caste|category|reserved|sc|st|obc|ews|pwd|reservation)\b",
             "procedure": r"\b(?:apply|application|registration|submit|submission|portal|steps?|report(?:ing)?|procedure|process)\b",
@@ -1342,6 +1382,22 @@ def _direct_fact_answer(question, records, parsed):
     if field in ("documents", "fees", "deadline", "eligibility", "procedure",
                  "issue_date", "reference_number", "location", "time", "contact",
                  "placement_amount", "source"):
+        # "2026 admission notice" may identify many unrelated circulars.
+        # Never imply both fees exist or don't exist in a specific one the
+        # student did not identify. Supply relevant choices with citations.
+        if (field == "fees" and len(records) > 1
+                and re.search(r"\bboth\b", q)
+                and re.search(r"\bapplication\s+fees?\b", q)
+                and re.search(r"\badmission\s+fees?\b", q)):
+            lines = [
+                f"- {_record_heading(item)}\n  {_record_source(item)}"
+                for item in records[:4]
+            ]
+            return (
+                "Which admission notice do you mean? Fee categories must be "
+                "checked independently within the same official document.\n"
+                + "\n".join(lines), records[:4]
+            )
         # Unscoped checklist queries may refer to several different notices.
         # Returning one institution-wide checklist would be misleading.
         if (len(records) > 1 and field == "documents" and not re.search(
@@ -1411,6 +1467,17 @@ def _compare_hostel_and_holiday(question, st):
                        records=found, active=None)
 
 
+def _is_comparison_query(question):
+    """Comparison can be expressed as 'How do A and B differ?', not just
+    'Compare A with B'. Avoid conflating a singular 'different notice'.
+    """
+    lower = str(question or "").casefold()
+    return bool(re.search(
+        r"\b(?:compare|comparison|differ|differences?|versus|vs\.?)\b",
+        lower,
+    ))
+
+
 def _comparison_notice_answer(question, st):
     """Compare distinct years without allowing the first year to filter both."""
     from retrieve import retrieve_filtered_notices
@@ -1428,10 +1495,12 @@ def _comparison_notice_answer(question, st):
     found = []
     missing = []
     for year, label in targets[:3]:
-        candidates = retrieve_filtered_notices(question, top_k=1,
+        candidates = retrieve_filtered_notices(question, top_k=6,
                                                force_year=year)
         if candidates:
-            found.append((label, candidates[0]))
+            # Compare a reporting circular with another reporting circular,
+            # not the first fee/registration notice from the same year.
+            found.append((label, _preferred_evidence_record(question, candidates)))
         else:
             missing.append(label)
     lines = []
@@ -1440,9 +1509,24 @@ def _comparison_notice_answer(question, st):
         if re.search(r"\b(?:deadlines?|reporting dates?|last dates?)\b", question, re.I):
             extracted_dates = sd.get("important_dates") or {}
             raw_last = extracted_dates.get("last_date") if isinstance(extracted_dates, dict) else None
-            details = ([f"Extracted last date: {raw_last}. Verify its purpose "
-                        f"(reporting versus application) against the PDF."] if raw_last
-                       else ["The matching notice has no reliably identified reporting deadline."])
+            reporting_points = [
+                str(p).strip() for p in [
+                    sd.get("action_required"), *(sd.get("key_points") or [])
+                ] if p and re.search(r"\b(?:reporting|report\s+to|verification)\b", str(p), re.I)
+                and re.search(r"\b(?:\d{1,2}[-/]\d{1,2}[-/](?:20)?\d{2}|"
+                              r"\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-z]+|"
+                              r"\d{1,2}\s+[A-Za-z]+\s+20\d{2})\b", str(p))
+            ]
+            if reporting_points:
+                details = ["Reporting/verification date evidence (as extracted): "
+                           + p[:650] for p in reporting_points[:3]]
+            elif raw_last:
+                details = [f"Extracted last date: {raw_last}; the available "
+                           f"record does not establish whether this is a "
+                           f"reporting deadline. Verify the original PDF."]
+            else:
+                details = ["The matching notice has no reliably identified "
+                           "reporting deadline in its extracted data."]
         else:
             details = [str(p) for p in sd.get("key_points") or [] if re.search(
                 r"\b(?:documents?|originals?|photocopies?|certificates?|verification|admission)\b", str(p), re.I
@@ -1588,7 +1672,7 @@ def ask_uniai(question, state=None):
             return _safe_grounded_answer(question, earlier, st, preserve=True)
         return _save_reply(st, question, "Please choose two notices to compare first.")
 
-    if re.search(r"\b(?:compare|comparison|difference\s+between)\b", question, re.I):
+    if _is_comparison_query(question):
         try:
             compared = _compare_hostel_and_holiday(question, st)
             if compared is not None:
@@ -1663,6 +1747,11 @@ def ask_uniai(question, state=None):
     if _is_list_request(question, parsed) or is_pure_latest or issue_date is not None:
         content = (format_notice_list(records) if len(records) > 1
                    else format_notice_line(records[0]))
+        requested_total = getattr(parsed, "count", None) or extract_requested_count(question)
+        if (_is_list_request(question, parsed) and requested_total is not None
+                and len(records) < requested_total):
+            content = (f"Found {len(records)} matching processed notice(s) "
+                       f"out of {requested_total} requested.\n\n" + content)
         return _save_reply(st, question, content, records=records,
                            active=records[0] if len(records) == 1 else None)
 

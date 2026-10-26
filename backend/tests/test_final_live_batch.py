@@ -1,0 +1,275 @@
+"""Synthetic regressions derived from results_50_after_fixes.csv.
+
+These tests validate behavior; they do not validate any official PDF's factual
+contents. Use a fresh live evaluation and human source review before release.
+"""
+import ast
+from pathlib import Path
+import re
+import sys
+import types
+import unittest
+from unittest.mock import patch
+
+from test_academic_scope import import_retrieve_offline, notice
+
+BACKEND = Path(__file__).resolve().parents[1]
+
+
+def offline_funcs(path, names, bindings=None):
+    source = BACKEND / path
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    nodes = [node for node in tree.body
+             if isinstance(node, ast.FunctionDef) and node.name in names]
+    found = {node.name for node in nodes}
+    if found != set(names):
+        raise ValueError(f"Missing requested functions: {set(names) - found}")
+    ns = {"re": re}
+    ns.update(bindings or {})
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), ns)
+    return ns
+
+
+def record_title(record):
+    return (record.get("structured_data") or {}).get("title") or record.get("title")
+
+
+def record_source(record):
+    return "Official source: " + record["url"]
+
+
+def saved_reply(st, question, answer, records=None, **kw):
+    return {"answer": answer, "records": list(records or [])}
+
+
+class FinalRetrievalRegressions(unittest.TestCase):
+    def test_q03_exclude_anti_ragging_and_refund_from_hostel(self):
+        rows = [
+            notice("hostel1", "Hostel Allotment Application for AY 2026-2027"),
+            notice("hostel2", "Hostel Closure during Durga Puja Festival"),
+            notice("rag", "Constitution of Anti-Ragging Committee",
+                   summary="Includes a hostel representative"),
+            notice("refund", "Guidelines for Refund of Fees",
+                   summary="Hostel residents may request a refund"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "Show recent hostel notices.", top_k=5, sort_latest=True)
+        self.assertEqual({r["notice_id"] for r in found}, {"hostel1", "hostel2"})
+
+    def test_q05_scholarship_requires_named_topic(self):
+        rows = [
+            notice("good", "Invitation for AICTE Doctoral Fellowship Scheme"),
+            notice("bad", "University Registration Notice",
+                   summary="Includes scholarship applications"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices("List five scholarship notices.", top_k=5)
+        self.assertEqual([r["notice_id"] for r in found], ["good"])
+
+    def test_q06_generic_examination_routine_rejects_phd_rpe(self):
+        rows = [
+            notice("phd", "RPE 2026 Course and Examination Schedule for PhD Candidates"),
+            notice("routine", "University Examination Routine for Odd Semester 2026"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "Find the latest examination routine notice.", sort_latest=True)
+        self.assertEqual([r["notice_id"] for r in found], ["routine"])
+
+    def test_q06_no_routine_means_no_relevant_notice(self):
+        ret = import_retrieve_offline([
+            notice("phd", "RPE 2026 Course and Examination Schedule for PhD Candidates")
+        ])
+        self.assertEqual(ret.retrieve_filtered_notices(
+            "Find the latest examination routine notice."), [])
+
+    def test_q17_jelet_2025_issue_date_cannot_use_generic_lateral_notice(self):
+        rows = [
+            notice("generic", "Opening Phase 1 Registration B.Tech Lateral AY 2025-26",
+                   summary="Students allotted under JELET must register"),
+            notice("specific", "Reporting dates for JELET-2025 allotted students",
+                   issue_date="11-12-2025"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "What is the official issue date of the JELET 2025 notice?",
+            top_k=5,
+        )
+        self.assertEqual([r["notice_id"] for r in found], ["specific"])
+
+    def test_q24_jelet_eligibility_cannot_use_btech_lateral_registration(self):
+        rows = [
+            notice("generic", "Opening of Phase 1 Registration for B.Tech Lateral "
+                   "and MCA Lateral for AY 2025-26",
+                   summary="JELET students may register."),
+            notice("specific", "JELET-2025 admission guidance"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "Give me eligibility criteria for JELET 2025.", top_k=5
+        )
+        self.assertEqual([r["notice_id"] for r in found], ["specific"])
+
+    def test_q42_closure_is_not_hostel_allotment(self):
+        rows = [
+            notice("allotment", "Hostel Allotment Application AY 2026-27"),
+            notice("closure", "Hostel Closure during Durga Puja"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "hostel closure during Durga Puja", top_k=5)
+        self.assertEqual([r["notice_id"] for r in found], ["closure"])
+
+    def test_q42_durga_puja_cannot_select_viswakarma(self):
+        rows = [
+            notice("wrong", "Declaration of University Holiday on Viswakarma Puja"),
+            notice("right", "Declaration of University Holiday during Durga Puja"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "university holiday during Durga Puja", top_k=5)
+        self.assertEqual([r["notice_id"] for r in found], ["right"])
+
+    def test_q42_no_durga_holiday_avoids_unrelated_source(self):
+        ret = import_retrieve_offline([
+            notice("wrong", "University Holiday on Viswakarma Puja")
+        ])
+        self.assertEqual(ret.retrieve_filtered_notices(
+            "university holiday during Durga Puja"), [])
+
+    def test_q23_refund_notice_is_not_generic_admission_notice(self):
+        rows = [
+            notice("wrong", "Guidelines for Refund of Admission Fees due to Withdrawal"),
+            notice("right", "B.Tech Admission Notice for Session 2026-2027"),
+        ]
+        ret = import_retrieve_offline(rows)
+        found = ret.retrieve_filtered_notices(
+            "Are both application fees and admission fees mentioned "
+            "in the 2026 admission notice?", top_k=5)
+        self.assertEqual([r["notice_id"] for r in found], ["right"])
+
+
+class FinalRoutingRegressions(unittest.TestCase):
+    def _main(self, *names, extra=None):
+        ns = {
+            "_record_heading": record_title,
+            "_record_source": record_source,
+            "_save_reply": saved_reply,
+            "_field_answer": lambda *args: "An explicitly supported fact.",
+        }
+        ns.update(extra or {})
+        return offline_funcs("Module4/main.py", set(names), ns)
+
+    def test_q11_issued_yesterday_is_temporal_not_generic_search(self):
+        f = offline_funcs("Module4/query_understanding.py",
+                          {"_explicit_temporal_notice_request"}, {
+                              "_detect_explicit_topic_or_entity": lambda x: None,
+                              "academic_sessions": lambda x: [],
+                          })["_explicit_temporal_notice_request"]
+        self.assertEqual(f("Which notices were issued yesterday?"),
+                         "yesterday_notices")
+        self.assertEqual(f("What notices were published today?"), "today_notices")
+
+    def test_q11_scoped_notice_still_not_global_time_query(self):
+        f = offline_funcs("Module4/query_understanding.py",
+                          {"_explicit_temporal_notice_request"}, {
+                              "_detect_explicit_topic_or_entity":
+                                  lambda text: "hostel" if "hostel" in text else None,
+                              "academic_sessions": lambda x: [],
+                          })["_explicit_temporal_notice_request"]
+        self.assertIsNone(f("Which hostel notices were issued yesterday?"))
+
+    def test_q41_natural_difference_triggers_comparison(self):
+        fn = self._main("_is_comparison_query")["_is_comparison_query"]
+        self.assertTrue(fn(
+            "How do admission reporting deadlines differ for WBJEEB 2025 and 2026?"
+        ))
+        self.assertFalse(fn("Find a different WBJEE notice."))
+
+    def test_q41_report_both_years_with_separate_sources(self):
+        docs = [
+            notice("old", "WBJEEB-2025 Document Verification and Admission Reporting"),
+            notice("new", "WBJEEB-2026 Document Verification and Admission Reporting"),
+        ]
+        docs[0]["structured_data"]["important_dates"] = {"last_date": "11-09-2025"}
+        docs[1]["structured_data"]["important_dates"] = {"last_date": "13-09-2026"}
+        ret = import_retrieve_offline(docs)
+        ns = self._main("_comparison_notice_answer", "_preferred_evidence_record")
+        with patch.dict(sys.modules, {"retrieve": ret}):
+            result = ns["_comparison_notice_answer"](
+                "How do admission reporting deadlines differ for WBJEEB 2025 and 2026?",
+                None,
+            )
+        self.assertIn("2025 —", result["answer"])
+        self.assertIn("2026 —", result["answer"])
+        self.assertIn("11-09-2025", result["answer"])
+        self.assertIn("13-09-2026", result["answer"])
+        self.assertIn("https://makautwb.ac.in/old.pdf", result["answer"])
+        self.assertIn("https://makautwb.ac.in/new.pdf", result["answer"])
+        self.assertEqual(len(result["records"]), 2)
+
+    def test_q42_real_comparison_never_pairs_allotment_and_viswakarma(self):
+        docs = [
+            notice("allot", "Hostel Allotment Application AY 2026-27"),
+            notice("close", "Hostel Closure during Durga Puja"),
+            notice("viswa", "University Holiday on Viswakarma Puja"),
+        ]
+        ret = import_retrieve_offline(docs)
+        ns = self._main("_compare_hostel_and_holiday")
+        ns["display_summary"] = lambda record: ("summary", None)
+        with patch.dict(sys.modules, {"retrieve": ret}):
+            result = ns["_compare_hostel_and_holiday"](
+                "Compare hostel closure and university holiday notices around Durga Puja",
+                None,
+            )
+        self.assertIn("Hostel Closure", result["answer"])
+        self.assertIn("No matching processed notice", result["answer"])
+        self.assertNotIn("Allotment Application", result["answer"])
+        self.assertNotIn("Viswakarma", result["answer"])
+        self.assertEqual([r["notice_id"] for r in result["records"]], ["close"])
+
+    def test_q23_multiple_admissions_requires_disambiguation(self):
+        ns = self._main("_direct_fact_answer", "_preferred_evidence_record")
+        docs = [
+            notice("first", "B.Tech Admission Notice 2026"),
+            notice("second", "M.Tech Admission Notice 2026"),
+        ]
+        parsed = types.SimpleNamespace(requested_field="fees")
+        answer, selected = ns["_direct_fact_answer"](
+            "Are both application fees and admission fees mentioned "
+            "in the 2026 admission notice?", docs, parsed)
+        self.assertIn("Which admission notice", answer)
+        self.assertIn("https://makautwb.ac.in/first.pdf", answer)
+        self.assertIn("https://makautwb.ac.in/second.pdf", answer)
+        self.assertEqual(len(selected), 2)
+
+    def test_q24_eligible_candidates_registration_not_criteria(self):
+        ns = self._main("_field_answer", extra={
+            "_plain": str,
+        })
+        r = notice(
+            "generic", "Opening of JELET-2025 Registration",
+        )
+        r["structured_data"]["key_points"] = [
+            "All eligible candidates must complete registration by 11 February."
+        ]
+        result = ns["_field_answer"](
+            "Give me eligibility criteria for JELET 2025", r, "eligibility")
+        self.assertIn("couldn't verify specific eligibility criteria", result)
+        self.assertNotIn("Eligibility evidence extracted", result)
+
+    def test_q26_category_certificate_not_assumed_eligibility(self):
+        ns = self._main("_field_answer", extra={"_plain": str})
+        r = notice("wbjee", "WBJEEB-2026 document verification")
+        r["structured_data"]["key_points"] = [
+            "Carry original OBC NCL and EWS certificates for document verification."
+        ]
+        result = ns["_field_answer"](
+            "Are there reserved-category eligibility requirements in the "
+            "WBJEE admission notice?", r, "eligibility")
+        self.assertIn("cannot confirm separate reserved-category eligibility", result)
+
+
+if __name__ == "__main__":
+    unittest.main()
