@@ -11,6 +11,8 @@ on:
       - 'backend/retrieve.py'
       - 'backend/scheduler/sync_notices.py'
       - 'backend/tests/test_remaining_bugs.py'
+      - 'backend/evaluation/questions_50.json'
+      - 'backend/evaluation/run_50.py'
       - '.github/workflows/notice_sync.yml'
       - '.github/workflows/remaining_reliability_tests.yml'
       - 'frontend/src/App.jsx'
@@ -33,7 +35,7 @@ jobs:
           python-version: '3.11'
       - name: Compile changed Python files
         run: |
-          python -m py_compile backend/app.py backend/session_persistence.py             backend/Module4/conversation_state.py backend/Module1/scrapper.py             backend/Module3/main.py backend/retrieve.py backend/scheduler/sync_notices.py
+          python -m py_compile backend/app.py backend/session_persistence.py             backend/Module4/conversation_state.py backend/Module1/scrapper.py             backend/Module3/main.py backend/retrieve.py backend/scheduler/sync_notices.py backend/evaluation/run_50.py
       - name: Offline regression suite (no API keys)
         env:
           PYTHONPATH: backend
