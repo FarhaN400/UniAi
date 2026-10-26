@@ -158,7 +158,9 @@ def index_one_notice(notice):
 
     # Mark indexed only after successful Pinecone call
     result = notices_collection.update_one(
-        {"_id": notice["_id"]},
+        {"_id": notice["_id"], "status": "processed",
+         "pdf_sha256": notice.get("pdf_sha256"),
+         "quality_review_required": {"$ne": True}},
         {
             "$set": {
                 "pinecone_indexed": True,
@@ -171,8 +173,8 @@ def index_one_notice(notice):
 
     if result.matched_count != 1:
         raise RuntimeError(
-            "Pinecone upsert succeeded, but MongoDB "
-            "indexing status could not be updated"
+            "The notice changed during indexing; refusing to mark a stale "
+            "Pinecone upsert as current. A newer extraction will be reindexed."
         )
 
     print(
@@ -198,7 +200,9 @@ def index_all_processed_notices(limit=None, reindex=False):
             {"pinecone_indexed": False}
         ]
 
-    cursor = notices_collection.find(query)
+    cursor = notices_collection.find(query).sort(
+        [("processed_at", 1), ("detected_at", 1)]
+    )
 
     if limit is not None:
         cursor = cursor.limit(limit)
