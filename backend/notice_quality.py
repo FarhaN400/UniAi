@@ -25,9 +25,14 @@ def summary_warning(record):
     # those references do not by themselves invalidate a summary.
     dated_event = re.search(
         r"\b(?:report(?:ing)?|admission)\s+(?:dates?|on|from|between|during)\b"
-        r"[\s\S]{0,150}?\b(20\d{2})\b", summary, re.I
+        r"([\s\S]{0,220})", summary, re.I
     )
-    if dated_event and int(dated_event.group(1)) < target_year:
+    # A lead-in can identify JELET-2025 before giving 'Oct 2024'.
+    # Examine every date year in the relevant reporting passage, not just
+    # the first mentioned year.
+    years = [int(y) for y in re.findall(r"(?<!\d)(20\d{2})(?!\d)",
+                                        dated_event.group(1))] if dated_event else []
+    if any(year < target_year for year in years):
         return ("The extracted admission/reporting dates appear to precede "
                 "the entrance-exam year. Summary withheld until the official "
                 "PDF is reviewed.")
