@@ -150,7 +150,8 @@ def answer_fee_question(question, record, source, title):
             return (f"{kind.capitalize()}-fee evidence from '{title}':\n"
                     + "\n".join(f"- {line}" for line in lines)
                     + f"\n{source}")
-        return (f"I cannot verify a {kind}-fee amount from the available "
+        article = "an" if kind in ("application", "admission", "examination") else "a"
+        return (f"I cannot verify {article} {kind}-fee amount from the available "
                 f"extracted details of '{title}'. A different fee type does "
                 f"not establish this amount. Check the original PDF.\n{source}")
 
