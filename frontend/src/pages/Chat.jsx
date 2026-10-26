@@ -15,6 +15,7 @@ import {
 import Composer from '../components/Composer';
 import SourcePanel from '../components/SourcePanel';
 import FormattedMessage, { extractUrlsFromText } from '../components/FormattedMessage';
+import { getLatestAssistantMessage, getSourcesForMessage } from '../lib/sources';
 
 export default function Chat({ chat, onSend, loading, error }) {
   const [open, setOpen] = useState(false);
@@ -26,12 +27,9 @@ export default function Chat({ chat, onSend, loading, error }) {
   const messages = chat?.messages || [];
   // Sources always belong to one assistant response, never an earlier
   // answer selected merely because it had nonempty citations.
-  const latestAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-  const latestSources = latestAssistant?.sources || [];
-  const selectedAssistant = messages.find(m =>
-    m.role === 'assistant' && m.id === selectedSourceMessageId
-  );
-  const displayedSources = selectedAssistant?.sources || latestSources;
+  const latestAssistant = getLatestAssistantMessage(messages);
+  const latestSources = getSourcesForMessage(messages);
+  const displayedSources = getSourcesForMessage(messages, selectedSourceMessageId);
 
   // Track loading time to give friendly progress feedback
   useEffect(() => {
