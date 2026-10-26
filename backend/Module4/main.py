@@ -1194,12 +1194,33 @@ def _out_of_scope(question):
     ) and not re.search(r"\b(?:notice|university|makaut|campus|college)\b", lower))
 
 
-def _is_list_request(question):
-    lower = str(question or "").lower()
-    return bool(re.search(
-        r"\b(?:find|show|list|give|provide|any|are\s+there|what\s+notices|which\s+notices|recent\s+notices|latest\s+notices)\b",
+def _is_list_request(question, parsed=None):
+    """Display notices only for notice-list intent, not fact/field questions."""
+    lower = str(question or "").casefold()
+    singular_or_plural = r"(?:notices?|notifications?|circulars?)"
+    plural = r"(?:notices|notifications|circulars)"
+
+    # Verbs such as "give" and "show" alone do not make a list request.
+    generic_notice_request = bool(re.search(
+        rf"\b(?:find|show|list|give|provide|display)\b[^.!?]{{0,110}}\b{singular_or_plural}\b",
         lower,
-    )) and not bool(re.search(r"\b(?:what\s+is\s+the\s+(?:deadline|fee)|how\s+much)\b", lower))
+    ))
+    plural_notice_request = bool(
+        re.search(
+            rf"\b(?:find|show|list|give|provide|display)\b[^.!?]{{0,110}}\b{plural}\b",
+            lower,
+        )
+        or re.search(
+            rf"\b(?:which|what|any|are\s+there)\b[^.!?]{{0,90}}\b{plural}\b",
+            lower,
+        )
+    )
+
+    # "Give me the eligibility criteria" requests facts; "list notices about
+    # eligibility" requests notice results even though a field was detected.
+    if getattr(parsed, "requested_field", None):
+        return plural_notice_request
+    return generic_notice_request or plural_notice_request
 
 
 def _is_single_target(question, parsed):
@@ -1445,7 +1466,7 @@ def ask_uniai(question, state=None):
             reply = _no_matches(question)
         return _save_reply(st, question, reply, records=[])
 
-    if _is_list_request(question) or is_pure_latest or issue_date is not None:
+    if _is_list_request(question, parsed) or is_pure_latest or issue_date is not None:
         content = (format_notice_list(records) if len(records) > 1
                    else format_notice_line(records[0]))
         return _save_reply(st, question, content, records=records,
