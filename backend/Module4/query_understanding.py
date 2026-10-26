@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
+from academic_scope import academic_sessions, matches_session
+
 
 class QueryUnderstandingResult(BaseModel):
     intent: Literal[
@@ -417,6 +419,13 @@ def explicitly_changes_notice_topic(question, active_notice):
         data.get('target_audience', ''), data.get('key_points', ''),
     )).lower()
 
+    requested = academic_sessions(q)
+    if requested:
+        # An active 2025-26 notice must not handle a follow-up explicitly
+        # requesting 2026-27, despite sharing the numeric year 2026.
+        if not all(matches_session(active_notice, pair) for pair in requested):
+            return True
+
     explicit_years = set(re.findall(r'\b20\d{2}\b', q))
     notice_years = set(re.findall(r'\b20\d{2}\b', active_text))
     if explicit_years and notice_years and not explicit_years.issubset(notice_years):
@@ -452,6 +461,9 @@ def _explicit_temporal_notice_request(text):
     through topic search rather than return all university notices.
     """
     lower = str(text or "").lower()
+    # A year-qualified/latest academic session is scoped, not global latest.
+    if academic_sessions(lower) or re.search(r"\b20\d{2}\b", lower):
+        return None
     if _detect_explicit_topic_or_entity(lower):
         return None
     if not re.search(r"\b(?:notices?|notifications?|circulars?)\b", lower):
