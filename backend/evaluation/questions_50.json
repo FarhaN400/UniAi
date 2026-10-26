@@ -1,0 +1,357 @@
+{
+  "name": "UniAI 50-question end-to-end evaluation",
+  "version": 1,
+  "description": "Live evaluation requires a deployed backend and human comparison against the official PDF. Questions do not assert that a particular notice is currently present.",
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "retrieval",
+      "question": "Find the WBJEEB 2026 document verification notice.",
+      "expected_behavior": "Select WBJEEB 2026 verification notice, not WBJEEB 2025.",
+      "conversation": "single-1"
+    },
+    {
+      "id": "Q02",
+      "category": "retrieval",
+      "question": "Find the JELET 2025 admission notice.",
+      "expected_behavior": "Select only JELET 2025 records when available.",
+      "conversation": "single-2"
+    },
+    {
+      "id": "Q03",
+      "category": "retrieval",
+      "question": "Show recent hostel notices.",
+      "expected_behavior": "List hostel-related notices with their own sources.",
+      "conversation": "single-3"
+    },
+    {
+      "id": "Q04",
+      "category": "retrieval",
+      "question": "Find the student registration notice for academic session 2026-27.",
+      "expected_behavior": "Do not confuse session 2026-27 with 2025-26.",
+      "conversation": "single-4"
+    },
+    {
+      "id": "Q05",
+      "category": "retrieval",
+      "question": "List five scholarship notices.",
+      "expected_behavior": "List no more than five scholarship notices with correct titles and URLs.",
+      "conversation": "single-5"
+    },
+    {
+      "id": "Q06",
+      "category": "retrieval",
+      "question": "Find the latest examination routine notice.",
+      "expected_behavior": "Prioritize examination schedule, not unrelated exam fee notices.",
+      "conversation": "single-6"
+    },
+    {
+      "id": "Q07",
+      "category": "retrieval",
+      "question": "Show admission reporting instructions for WBJEE 2026.",
+      "expected_behavior": "Use the matching entrance exam and admission/reporting topic.",
+      "conversation": "single-7"
+    },
+    {
+      "id": "Q08",
+      "category": "retrieval",
+      "question": "Find the registration of students notice for academic session 2025-26.",
+      "expected_behavior": "Require exact 2025-26 session rather than 2026-27.",
+      "conversation": "single-8"
+    },
+    {
+      "id": "Q09",
+      "category": "latest",
+      "question": "Show the five latest MAKAUT notices.",
+      "expected_behavior": "Order five matching processed notices by official-issue/discovery ordering; distinguish dates.",
+      "conversation": "single-9"
+    },
+    {
+      "id": "Q10",
+      "category": "latest",
+      "question": "What notices were published today?",
+      "expected_behavior": "Include only verifiable official issue dates equal to local today.",
+      "conversation": "single-10"
+    },
+    {
+      "id": "Q11",
+      "category": "latest",
+      "question": "Which notices were issued yesterday?",
+      "expected_behavior": "Include only notices issued yesterday by official issue date.",
+      "conversation": "single-11"
+    },
+    {
+      "id": "Q12",
+      "category": "latest",
+      "question": "Show the latest WBJEE notice.",
+      "expected_behavior": "Keep WBJEE as a hard topic constraint.",
+      "conversation": "single-12"
+    },
+    {
+      "id": "Q13",
+      "category": "latest",
+      "question": "Show latest notices for academic session 2026-27.",
+      "expected_behavior": "Do not return 2025-26 due to overlapping end year.",
+      "conversation": "single-13"
+    },
+    {
+      "id": "Q14",
+      "category": "latest",
+      "question": "Show notices issued on 26 October 2026.",
+      "expected_behavior": "Require the official issue date, not detected_at.",
+      "conversation": "single-14"
+    },
+    {
+      "id": "Q15",
+      "category": "deadlines",
+      "question": "What is the last date in the WBJEEB 2026 verification notice?",
+      "expected_behavior": "State date only when backed by the specific notice and identify what action it refers to.",
+      "conversation": "single-15"
+    },
+    {
+      "id": "Q16",
+      "category": "deadlines",
+      "question": "What is the application deadline mentioned in the WBJEEB 2026 notice?",
+      "expected_behavior": "Do not mislabel reporting dates as application deadline.",
+      "conversation": "single-16"
+    },
+    {
+      "id": "Q17",
+      "category": "deadlines",
+      "question": "What is the official issue date of the JELET 2025 notice?",
+      "expected_behavior": "Use official extracted issue date and acknowledge if unknown.",
+      "conversation": "single-17"
+    },
+    {
+      "id": "Q18",
+      "category": "deadlines",
+      "question": "Which academic session does the 2026-27 student registration notice concern?",
+      "expected_behavior": "Identify 2026-27, not simply the 2026 issue year.",
+      "conversation": "single-18"
+    },
+    {
+      "id": "Q19",
+      "category": "deadlines",
+      "question": "When is the hostel scheduled to reopen after Durga Puja?",
+      "expected_behavior": "Do not infer a reopening date from closure end date.",
+      "conversation": "single-19"
+    },
+    {
+      "id": "Q20",
+      "category": "deadlines",
+      "question": "Compare the academic sessions 2025-26 and 2026-27 student registration notices.",
+      "expected_behavior": "Compare two distinct academic sessions without creating a third 2027 notice.",
+      "conversation": "single-20"
+    },
+    {
+      "id": "Q21",
+      "category": "fees_eligibility",
+      "question": "What is the application fee for the WBJEEB 2026 notice?",
+      "expected_behavior": "Require explicit application-fee label and amount, not admission fee.",
+      "conversation": "single-21"
+    },
+    {
+      "id": "Q22",
+      "category": "fees_eligibility",
+      "question": "What is the admission fee for the WBJEEB 2026 notice?",
+      "expected_behavior": "Do not substitute an application-fee amount.",
+      "conversation": "single-22"
+    },
+    {
+      "id": "Q23",
+      "category": "fees_eligibility",
+      "question": "Are both application fees and admission fees mentioned in the 2026 admission notice?",
+      "expected_behavior": "Keep the two fee categories distinct.",
+      "conversation": "single-23"
+    },
+    {
+      "id": "Q24",
+      "category": "fees_eligibility",
+      "question": "Give me eligibility criteria for JELET 2025.",
+      "expected_behavior": "Return eligibility facts rather than a list of notices.",
+      "conversation": "single-24"
+    },
+    {
+      "id": "Q25",
+      "category": "fees_eligibility",
+      "question": "What fee is stated in the latest student registration notice?",
+      "expected_behavior": "If no fee type stated, do not label it application fee.",
+      "conversation": "single-25"
+    },
+    {
+      "id": "Q26",
+      "category": "fees_eligibility",
+      "question": "Are there reserved-category eligibility requirements in the WBJEE admission notice?",
+      "expected_behavior": "Preserve qualifiers and do not invent minimum percentages.",
+      "conversation": "single-26"
+    },
+    {
+      "id": "Q27",
+      "category": "documents",
+      "question": "What documents do WBJEEB 2026 allotted students need for verification?",
+      "expected_behavior": "List only named requirements from correct official PDF.",
+      "conversation": "single-27"
+    },
+    {
+      "id": "Q28",
+      "category": "documents",
+      "question": "Show the document checklist from the WBJEEB 2025 admission notice.",
+      "expected_behavior": "Keep 2025 and 2026 lists separate.",
+      "conversation": "single-28"
+    },
+    {
+      "id": "Q29",
+      "category": "documents",
+      "question": "Must students bring original Class 10 and Class 12 marksheets?",
+      "expected_behavior": "Answer from actual OCR instructions; retain original/photocopy distinction.",
+      "conversation": "single-29"
+    },
+    {
+      "id": "Q30",
+      "category": "documents",
+      "question": "Is a domicile certificate required for document verification?",
+      "expected_behavior": "Preserve if-applicable and residency qualifiers.",
+      "conversation": "single-30"
+    },
+    {
+      "id": "Q31",
+      "category": "documents",
+      "question": "Are self-attested photocopies required in the WBJEE verification notice?",
+      "expected_behavior": "Cite source and do not infer copy count.",
+      "conversation": "single-31"
+    },
+    {
+      "id": "Q32",
+      "category": "documents",
+      "question": "What documents should students carry for university registration?",
+      "expected_behavior": "Do not treat generic document-verification statement as a real checklist.",
+      "conversation": "single-32"
+    },
+    {
+      "id": "Q33",
+      "category": "followups",
+      "question": "Show the five latest notices.",
+      "expected_behavior": "Establish a numbered list to support subsequent ordinal follow-ups.",
+      "conversation": "followup-sequence"
+    },
+    {
+      "id": "Q34",
+      "category": "followups",
+      "question": "Explain the first notice.",
+      "expected_behavior": "Use notice #1 from preceding list; keep original numbered list intact.",
+      "conversation": "followup-sequence"
+    },
+    {
+      "id": "Q35",
+      "category": "followups",
+      "question": "What is its official PDF link?",
+      "expected_behavior": "Use the first selected notice, not a different notice.",
+      "conversation": "followup-sequence"
+    },
+    {
+      "id": "Q36",
+      "category": "followups",
+      "question": "Now explain the second notice.",
+      "expected_behavior": "Select original notice #2, not a new search.",
+      "conversation": "followup-sequence"
+    },
+    {
+      "id": "Q37",
+      "category": "followups",
+      "question": "What is the deadline in this notice?",
+      "expected_behavior": "Answer from notice #2 or acknowledge deadline absent.",
+      "conversation": "followup-sequence"
+    },
+    {
+      "id": "Q38",
+      "category": "followups",
+      "question": "What is the fee in that notice?",
+      "expected_behavior": "Stay on notice #2 and never inherit fee from notice #1.",
+      "conversation": "followup-sequence"
+    },
+    {
+      "id": "Q39",
+      "category": "comparisons",
+      "question": "Compare WBJEEB 2025 and WBJEEB 2026 verification requirements.",
+      "expected_behavior": "Cite facts for each year separately; do not merge required document lists.",
+      "conversation": "single-39"
+    },
+    {
+      "id": "Q40",
+      "category": "comparisons",
+      "question": "Compare student registration notices for sessions 2025-26 and 2026-27.",
+      "expected_behavior": "Retrieve correct pair of academic sessions.",
+      "conversation": "single-40"
+    },
+    {
+      "id": "Q41",
+      "category": "comparisons",
+      "question": "How do admission reporting deadlines differ for WBJEEB 2025 and 2026?",
+      "expected_behavior": "Use matching dated notices; if missing state incomplete comparison.",
+      "conversation": "single-41"
+    },
+    {
+      "id": "Q42",
+      "category": "comparisons",
+      "question": "Compare hostel closure and university holiday notices around Durga Puja.",
+      "expected_behavior": "Cite distinct sources and avoid conflating two subject types.",
+      "conversation": "single-42"
+    },
+    {
+      "id": "Q43",
+      "category": "missing",
+      "question": "What is the guaranteed placement salary in the WBJEEB 2026 notice?",
+      "expected_behavior": "Do not hallucinate salary; explain absence of evidence.",
+      "conversation": "single-43"
+    },
+    {
+      "id": "Q44",
+      "category": "missing",
+      "question": "What is the application fee if the admission notice only states an admission fee?",
+      "expected_behavior": "Do not treat admission fee as proof of application fee.",
+      "conversation": "single-44"
+    },
+    {
+      "id": "Q45",
+      "category": "missing",
+      "question": "Provide the notice PDF for a nonexistent university circular about Mars admission in 2040.",
+      "expected_behavior": "Do not cite unrelated PDF or fabricate source URL.",
+      "conversation": "single-45"
+    },
+    {
+      "id": "Q46",
+      "category": "missing",
+      "question": "What was published today if none of the processed notices has today's official issue date?",
+      "expected_behavior": "Return no verified today notices, rather than notices first detected today.",
+      "conversation": "single-46"
+    },
+    {
+      "id": "Q47",
+      "category": "out_of_scope",
+      "question": "What is today's IPL cricket score?",
+      "expected_behavior": "Politely decline unrelated university-notice topic.",
+      "conversation": "single-47"
+    },
+    {
+      "id": "Q48",
+      "category": "out_of_scope",
+      "question": "Who won the latest football World Cup?",
+      "expected_behavior": "Remain within MAKAUT-notice assistant scope.",
+      "conversation": "single-48"
+    },
+    {
+      "id": "Q49",
+      "category": "out_of_scope",
+      "question": "Write a fictional university notice announcing free laptops for everybody.",
+      "expected_behavior": "Do not present fiction as an official retrieved MAKAUT notice.",
+      "conversation": "single-49"
+    },
+    {
+      "id": "Q50",
+      "category": "out_of_scope",
+      "question": "Find WBJEEB 2099 admission notice and give me the exact fee.",
+      "expected_behavior": "Do not invent a future official notice, fee or PDF.",
+      "conversation": "single-50"
+    }
+  ]
+}
