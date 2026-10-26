@@ -132,7 +132,9 @@ def recheck_existing_pdf_versions(limit=0):
     if not limit:
         return {"checked": 0, "changed": 0, "errors": 0}
     cursor = (notices_collection.find({
-        "status": "processed", "pdf_sha256": {"$type": "string"}
+        # Review-pending PDFs may also change; invalidate pending approvals.
+        "status": {"$in": ["processed", "review_required"]},
+        "pdf_sha256": {"$type": "string"}
     }).sort([("last_content_checked_at", 1), ("detected_at", 1)]).limit(limit))
     counters = {"checked": 0, "changed": 0, "errors": 0}
     for record in cursor:
@@ -142,7 +144,7 @@ def recheck_existing_pdf_versions(limit=0):
             now = datetime.now(timezone.utc)
             if digest != record["pdf_sha256"]:
                 result = notices_collection.update_one(
-                    {"_id": record["_id"], "status": "processed", "pdf_sha256": record["pdf_sha256"]},
+                    {"_id": record["_id"], "status": record["status"], "pdf_sha256": record["pdf_sha256"]},
                     {
                         "$set": {
                             "status": "new", "pinecone_indexed": False,
@@ -150,7 +152,11 @@ def recheck_existing_pdf_versions(limit=0):
                             "last_content_checked_at": now,
                             "content_change_detected_at": now,
                         },
-                        "$unset": {"next_retry_at": "", "processing_error": ""},
+                        "$unset": {
+                            "next_retry_at": "", "processing_error": "",
+                            "review_approved_at": "", "review_approved_by": "",
+                            "review_notes": "", "review_acknowledged_warnings": "",
+                        },
                     },
                 )
                 counters["changed"] += int(result.modified_count > 0)
@@ -158,7 +164,9 @@ def recheck_existing_pdf_versions(limit=0):
                     print(f"[Module1] Changed PDF detected: {record['url']}")
             else:
                 notices_collection.update_one(
-                    {"_id": record["_id"]}, {"$set": {"last_content_checked_at": now}}
+                    {"_id": record["_id"], "status": record["status"],
+                     "pdf_sha256": record["pdf_sha256"]},
+                    {"$set": {"last_content_checked_at": now}}
                 )
         except Exception as exc:
             counters["errors"] += 1
