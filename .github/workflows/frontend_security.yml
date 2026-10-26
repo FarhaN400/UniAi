@@ -1,0 +1,39 @@
+name: Frontend Security and Compatibility
+
+on:
+  pull_request:
+    paths:
+      - frontend/package.json
+      - frontend/package-lock.json
+      - .github/workflows/frontend_security.yml
+  push:
+    branches: [fix/frontend-security-dependencies]
+    paths:
+      - frontend/package.json
+      - frontend/package-lock.json
+      - .github/workflows/frontend_security.yml
+
+jobs:
+  frontend-security:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install exact locked dependencies
+        run: npm ci
+      - name: Confirm patched tool versions
+        run: |
+          node -e "const vite=require('vite/package.json'); const parser=require('postcss-selector-parser/package.json'); if(!vite.version.startsWith('7.3.')) throw Error('Vite must be 7.3.x'); if(parser.version!=='6.1.5') throw Error('Selector parser must be the security patched 6.1.5'); console.log('Verified Vite',vite.version,'and parser',parser.version)"
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: Verify frontend tests
+        run: node --test tests/*.test.mjs
+      - name: Build Cloudflare frontend
+        run: npm run build
