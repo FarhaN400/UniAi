@@ -38,7 +38,6 @@ _LIST_HEADING = re.compile(
     r"(?:documents?|certificates?)|"
     r"documents?\s+(?:required|needed|to\s+be\s+(?:produced|submitted)|"
     r"for\s+(?:physical\s+)?verification)|"
-    r"document\s+verification|"
     r"certificates?\s+to\s+be\s+(?:produced|submitted)|"
     r"bring\s+(?:the\s+)?(?:following|original)\s+documents?"
     r")\b",
@@ -53,7 +52,8 @@ _REQUIREMENT = re.compile(
 _NOT_REQUIRED = re.compile(
     r"\b(?:not\s+(?:required|needed|necessary|to\s+be\s+(?:submitted|produced|"
     r"carried|brought))|no\s+need\s+to|need\s+not|do\s+not\s+"
-    r"(?:bring|submit|provide|produce|upload|carry)|not\s+accepted)\b",
+    r"(?:bring|submit|provide|produce|upload|carry)|not\s+accepted|"
+    r"no\s+[\w\s-]{1,55}?\s+(?:is\s+)?required)\b",
     re.IGNORECASE,
 )
 _COPY_INSTRUCTIONS = re.compile(
@@ -89,9 +89,18 @@ def _extract_named_lines(raw_text):
     lines = list(_lines(str(raw_text or "")[:180000]))
     found, notes, seen, notes_seen = [], [], set(), set()
     scope_until = -1
+    last_list_entry = -1
     for i, line in enumerate(lines):
-        if _LIST_HEADING.search(line):
-            scope_until = i + 18
+        is_heading = bool(
+            _LIST_HEADING.search(line)
+            or re.fullmatch(r"(?:document|documents|physical)\s+verification\s*:?", line, re.I)
+        )
+        if is_heading:
+            scope_until = i + 60
+            last_list_entry = i
+        elif i - last_list_entry > 4:
+            # Do not pull a later, unrelated section into the document list.
+            scope_until = -1
 
         for part in _clauses(line):
             if _NOT_REQUIRED.search(part):
@@ -102,6 +111,8 @@ def _extract_named_lines(raw_text):
             # A random reference to an application form or mark-sheet in an
             # eligibility paragraph does not establish a required document.
             if has_named_document and (in_document_list or has_requirement):
+                if in_document_list:
+                    last_list_entry = i
                 key = re.sub(r"\W+", " ", part).strip().casefold()
                 if key and key not in seen:
                     seen.add(key)
