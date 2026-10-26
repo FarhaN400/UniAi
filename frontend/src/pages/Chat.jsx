@@ -15,16 +15,21 @@ import {
 import Composer from '../components/Composer';
 import SourcePanel from '../components/SourcePanel';
 import FormattedMessage, { extractUrlsFromText } from '../components/FormattedMessage';
+import { getLatestAssistantMessage, getSourcesForMessage } from '../lib/sources';
 
 export default function Chat({ chat, onSend, loading, error }) {
   const [open, setOpen] = useState(false);
+  const [selectedSourceMessageId, setSelectedSourceMessageId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const [loadingSeconds, setLoadingSeconds] = useState(0);
   const bottom = useRef(null);
 
   const messages = chat?.messages || [];
-  const latestSources =
-    [...messages].reverse().find(m => m.role === 'assistant' && m.sources?.length)?.sources || [];
+  // Sources always belong to one assistant response, never an earlier
+  // answer selected merely because it had nonempty citations.
+  const latestAssistant = getLatestAssistantMessage(messages);
+  const latestSources = getSourcesForMessage(messages);
+  const displayedSources = getSourcesForMessage(messages, selectedSourceMessageId);
 
   // Track loading time to give friendly progress feedback
   useEffect(() => {
@@ -46,7 +51,14 @@ export default function Chat({ chat, onSend, loading, error }) {
 
   useEffect(() => {
     setOpen(false);
+    setSelectedSourceMessageId(null);
   }, [chat?.id]);
+
+  // Returning to latest-response sources must not keep an older selected
+  // message when another assistant reply arrives in this chat.
+  useEffect(() => {
+    setSelectedSourceMessageId(null);
+  }, [latestAssistant?.id]);
 
   const copyToClipboard = (text, id) => {
     navigator.clipboard?.writeText(text);
@@ -70,7 +82,10 @@ export default function Chat({ chat, onSend, loading, error }) {
             </div>
           </div>
           <button
-            onClick={() => setOpen(v => !v)}
+            onClick={() => {
+              setSelectedSourceMessageId(null);
+              setOpen(v => !v);
+            }}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-semibold transition ${
               open
                 ? 'bg-brand-50 border-brand-300 text-brand-700 dark:bg-blue-950/50 dark:border-blue-700 dark:text-blue-300'
@@ -161,7 +176,10 @@ export default function Chat({ chat, onSend, loading, error }) {
 
                           {m.sources?.length > 0 && (
                             <button
-                              onClick={() => setOpen(true)}
+                              onClick={() => {
+                                setSelectedSourceMessageId(m.id);
+                                setOpen(true);
+                              }}
                               className="text-xs font-semibold text-brand-600 dark:text-blue-400 hover:text-brand-700 dark:hover:text-blue-300 flex items-center gap-1.5 bg-brand-50/60 dark:bg-blue-950/30 px-2.5 py-1 rounded-lg border border-brand-100 dark:border-blue-900/50 transition"
                             >
                               <BookOpen size={13} />
@@ -269,7 +287,7 @@ export default function Chat({ chat, onSend, loading, error }) {
       </div>
 
       {/* Sources Right Sidebar */}
-      <SourcePanel sources={latestSources} open={open} onClose={() => setOpen(false)} />
+      <SourcePanel sources={displayedSources} open={open} onClose={() => setOpen(false)} />
     </div>
   );
 }

@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from pymongo import MongoClient
+
+from notice_dates import official_issue_date
 from academic_scope import (
     academic_sessions, requested_session, matches_session, matches_identity_year,
 )
@@ -85,20 +87,15 @@ def normalize_datetime(value):
 
 
 def parse_issue_date(record):
-    """Prefer structured official issue_date, falling back to scrape timestamp."""
-    sd = record.get("structured_data") or {}
-    value = sd.get("issue_date")
-    if isinstance(value, datetime):
-        return normalize_datetime(value)
-    if isinstance(value, date):
+    """Date for sorting only. Prefer official issue date; otherwise discovery.
+
+    Never use this function as evidence for 'issued today', 'published
+    yesterday', or an explicitly requested publication date. Those use
+    official_issue_date(record) and reject missing/invalid values.
+    """
+    value = official_issue_date(record)
+    if value is not None:
         return datetime(value.year, value.month, value.day, tzinfo=INDIA_TZ)
-    if value:
-        for fmt in ("%d-%m-%Y", "%d-%m-%Y %H:%M", "%Y-%m-%d",
-                    "%d/%m/%Y", "%Y/%m/%d"):
-            try:
-                return datetime.strptime(str(value).strip(), fmt).replace(tzinfo=INDIA_TZ)
-            except ValueError:
-                pass
     return normalize_datetime(record.get("detected_at"))
 
 
@@ -316,12 +313,12 @@ def retrieve_time_based(question, top_k=3):
     records = list(notices_collection.find({"status": "processed"}))
     if "today" in text or "today's" in text:
         target = now.date()
-        records = [r for r in records if parse_issue_date(r).date() == target]
+        records = [r for r in records if official_issue_date(r) == target]
     elif "yesterday" in text:
         target = now.date() - timedelta(days=1)
-        records = [r for r in records if parse_issue_date(r).date() == target]
+        records = [r for r in records if official_issue_date(r) == target]
     elif year is not None:
-        records = [r for r in records if parse_issue_date(r).year == year]
+        records = [r for r in records if (official_issue_date(r) or date.min).year == year]
     records.sort(key=parse_issue_date, reverse=True)
     return records[:max(0, int(top_k))]
 
@@ -489,9 +486,9 @@ def retrieve_semantic(question, top_k=5):
         if not candidates:
             return []
     if issue_date is not None:
-        dated = [r for r in candidates if parse_issue_date(r).date() == issue_date]
-        if dated:
-            candidates = dated
+        candidates = [r for r in candidates if official_issue_date(r) == issue_date]
+        if not candidates:
+            return []
     if rounds:
         round_matches = [r for r in candidates if _record_rounds(r) & rounds]
         if round_matches:
@@ -518,7 +515,7 @@ def retrieve_semantic(question, top_k=5):
             score *= 1.20
         if rounds and _record_rounds(record) & rounds:
             score *= 1.20
-        if issue_date and parse_issue_date(record).date() == issue_date:
+        if issue_date and official_issue_date(record) == issue_date:
             score *= 1.40
         if year is None and not issue_date:
             days = max(0, (now - parse_issue_date(record)).days)
@@ -882,14 +879,14 @@ def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
             continue
         if session is not None and not matches_session(record, session):
             continue
-        if target_date is not None and parse_issue_date(record).date() != target_date:
+        if target_date is not None and official_issue_date(record) != target_date:
             continue
         issued_year_request = bool(re.search(
             r"\b(?:issued|published|dated)\s+in\s+20\d{2}\b",
             str(question or ""), re.I,
         ))
         if target_date is None and year is not None:
-            year_ok = (parse_issue_date(record).year == year if issued_year_request
+            year_ok = ((official_issue_date(record) or date.min).year == year if issued_year_request
                        else True if session is not None
                        else _year_scope_matches(record, year))
             if not year_ok:
