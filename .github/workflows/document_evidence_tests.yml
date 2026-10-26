@@ -1,0 +1,31 @@
+name: Required Documents Regression Tests
+
+on:
+  pull_request:
+    paths:
+      - 'backend/Module4/document_utils.py'
+      - 'backend/Module4/main.py'
+      - 'backend/tests/test_document_evidence.py'
+      - '.github/workflows/document_evidence_tests.yml'
+  push:
+    branches:
+      - 'fix/required-documents-verification'
+    paths:
+      - 'backend/Module4/document_utils.py'
+      - 'backend/tests/test_document_evidence.py'
+      - '.github/workflows/document_evidence_tests.yml'
+
+jobs:
+  document-evidence-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run isolated regression suite
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_document_evidence.py' -v
