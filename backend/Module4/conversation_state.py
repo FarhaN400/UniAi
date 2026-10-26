@@ -17,6 +17,8 @@ class ConversationState:
         self.active_notice = None
         self.active_notice_id = None
         self.session_memory = {}
+        # Stable HTTP request IDs for replaying a response after a client timeout.
+        self.recent_requests = {}
 
     def extract_and_remember_user_name(self, text):
         """Extract names only from explicit introductions/corrections."""
