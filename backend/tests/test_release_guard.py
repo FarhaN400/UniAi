@@ -29,6 +29,7 @@ def import_runner():
 class FakeResponse:
     def __init__(self, data):
         self.data = data
+        self.status = 200
     def __enter__(self):
         return self
     def __exit__(self, *args):
