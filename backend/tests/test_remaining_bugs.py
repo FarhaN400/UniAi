@@ -196,6 +196,54 @@ def load_isolated(path, function_names, dependencies):
     return namespace
 
 
+class ReplayIdempotencyTests(unittest.TestCase):
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "app.py"
+        class HTTPExceptionForTest(Exception):
+            def __init__(self, status_code, detail):
+                super().__init__(detail)
+                self.status_code = status_code
+        self.http_error = HTTPExceptionForTest
+        self.calls = []
+        def answer(question, state):
+            self.calls.append(question)
+            state.append_turn(question, f"Answer for {question}", records=[])
+            return f"Answer for {question}"
+        self.module = load_isolated(path, {"_process_chat"}, {
+            "ask_uniai": answer,
+            "sources_from_records": lambda records: [],
+            "HTTPException": HTTPExceptionForTest,
+        })
+        self.state = ConversationState()
+
+    def test_retry_same_request_returns_cached_answer_without_new_turn(self):
+        request = types.SimpleNamespace(question="What is the fee?", request_id="req-1")
+        first = self.module["_process_chat"](request, "chat-1", self.state)
+        second = self.module["_process_chat"](request, "chat-1", self.state)
+        self.assertEqual(first, second)
+        self.assertEqual(self.calls, ["What is the fee?"])
+        self.assertEqual(len(self.state.chat_history), 1)
+
+    def test_reused_request_id_for_different_question_returns_conflict(self):
+        request = types.SimpleNamespace(question="What is the fee?", request_id="req-1")
+        self.module["_process_chat"](request, "chat-1", self.state)
+        with self.assertRaises(self.http_error) as error:
+            self.module["_process_chat"](
+                types.SimpleNamespace(question="Other question", request_id="req-1"),
+                "chat-1", self.state,
+            )
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_replay_response_persists_through_snapshot_restore(self):
+        request = types.SimpleNamespace(question="Deadline?", request_id="req-2")
+        first = self.module["_process_chat"](request, "chat-1", self.state)
+        snapshot = snapshot_state(self.state)
+        restored = restore_state(snapshot, FakeNotices([]))
+        self.assertEqual(self.module["_process_chat"](request, "chat-1", restored), first)
+        self.assertEqual(self.calls, ["Deadline?"])
+
+
 class PdfRevisionTests(unittest.TestCase):
     def test_recheck_includes_review_pending_and_processed(self):
         path = Path(__file__).resolve().parents[1] / "Module1" / "scrapper.py"
