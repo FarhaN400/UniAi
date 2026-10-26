@@ -579,6 +579,10 @@ def build_context_string(records, question=None):
             block.append(f"Action Required: {action}")
         if points:
             block.append("Key Points:\n" + "\n".join(f" - {point}" for point in points))
+        documents = sd.get("required_documents") or []
+        if documents:
+            block.append("Required Documents (extracted):\n" +
+                         "\n".join(f" - {doc}" for doc in documents if doc))
         raw = record.get("raw_text") or ""
         if raw and question:
             snippets = extract_relevant_snippets(raw, question,
