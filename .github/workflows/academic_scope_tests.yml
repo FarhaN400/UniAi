@@ -1,0 +1,34 @@
+name: Academic Session Retrieval Regression Tests
+
+on:
+  pull_request:
+    paths:
+      - 'backend/academic_scope.py'
+      - 'backend/retrieve.py'
+      - 'backend/Module4/main.py'
+      - 'backend/tests/test_academic_scope.py'
+      - '.github/workflows/academic_scope_tests.yml'
+  push:
+    branches:
+      - 'fix/academic-session-year-matching'
+    paths:
+      - 'backend/academic_scope.py'
+      - 'backend/retrieve.py'
+      - 'backend/Module4/main.py'
+      - 'backend/tests/test_academic_scope.py'
+      - '.github/workflows/academic_scope_tests.yml'
+
+jobs:
+  academic-scope-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run isolated academic scope regressions
+        env:
+          PYTHONPATH: backend
+        run: python -m unittest discover -s backend/tests -p 'test_academic_scope.py' -v

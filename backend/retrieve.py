@@ -13,6 +13,9 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from pymongo import MongoClient
+from academic_scope import (
+    academic_sessions, requested_session, matches_session, matches_identity_year,
+)
 
 load_dotenv()
 
@@ -211,6 +214,9 @@ def is_pure_time_query(question):
     ))
     if not has_time:
         return False
+    # A year or academic-session constraint means this is NOT global latest.
+    if extract_year_from_question(question) is not None:
+        return False
     if _explicit_topics(question):
         return False
     topic_indicators = (
@@ -262,23 +268,8 @@ def extract_relevant_snippets(raw_text, question, max_snippets=2, max_chars=450)
 
 
 def _document_year_matches(record, year):
-    if year is None:
-        return True
-    data = record.get("structured_data") or {}
-    # The notice's identifying fields carry more authority than incidental years
-    # mentioned in government circular numbers or historical references.
-    identifying = " ".join(str(value or "") for value in (
-        record.get("title"), data.get("title"), data.get("issue_date"),
-        data.get("academic_year"), data.get("target_audience"),
-    ))
-    if re.search(rf"(?<!\d){year}(?!\d)", identifying):
-        return True
-    # Some older notices have the year only in summary / body.
-    other = " ".join(str(value or "") for value in (
-        data.get("summary"), data.get("key_points"),
-        str(record.get("raw_text") or "")[:2000],
-    ))
-    return bool(re.search(rf"(?<!\d){year}(?!\d)", other))
+    """Match notice identity, not an incidental historical/publication year."""
+    return matches_identity_year(record, year)
 
 
 def _lexical_score(question, record):
@@ -318,6 +309,10 @@ def retrieve_time_based(question, top_k=3):
     now = datetime.now(INDIA_TZ)
     text = str(question or "").lower()
     year = extract_year_from_question(question)
+    if year is not None and not re.search(r"\b(?:today|yesterday)\b", text):
+        # "Latest notices for 2026-27" is a session identity constraint,
+        # not an issue-date=2026 filter.
+        return retrieve_filtered_notices(question, top_k=top_k, sort_latest=True)
     records = list(notices_collection.find({"status": "processed"}))
     if "today" in text or "today's" in text:
         target = now.date()
@@ -399,6 +394,11 @@ def retrieve_semantic(question, top_k=5):
         return []
 
     year = extract_year_from_question(question)
+    sessions = academic_sessions(question)
+    # A comparison needs two separately scoped retrievals.
+    if len(sessions) > 1:
+        return []
+    session = requested_session(question)
     topics = _explicit_topics(question)
     rounds = _requested_rounds(question)
     issue_date = _explicit_issue_date(question)
@@ -478,10 +478,16 @@ def retrieve_semantic(question, top_k=5):
         topical = [r for r in candidates if _topic_matches(r, topics)]
         if topical:
             candidates = topical
-    if year is not None:
-        same_year = [r for r in candidates if _document_year_matches(r, year)]
-        if same_year:
-            candidates = same_year
+    # Never return a different academic session or year if the requested
+    # one has no hits; a vector similarity score cannot override identity.
+    if session is not None:
+        candidates = [r for r in candidates if matches_session(r, session)]
+        if not candidates:
+            return []
+    elif year is not None:
+        candidates = [r for r in candidates if _document_year_matches(r, year)]
+        if not candidates:
+            return []
     if issue_date is not None:
         dated = [r for r in candidates if parse_issue_date(r).date() == issue_date]
         if dated:
@@ -523,7 +529,7 @@ def retrieve_semantic(question, top_k=5):
 
     if DEBUG():
         print(f"[UniAI Hybrid] Candidates={len(records_by_id)}, scoped={len(candidates)}; "
-              f"year={year}, topics={sorted(topics)}, rounds={sorted(rounds)}, "
+              f"year={year}, session={session}, topics={sorted(topics)}, rounds={sorted(rounds)}, "
               f"notice_date={issue_date}; query={question!r}")
         for rank, (record, score) in enumerate(ranked[:5], 1):
             print(f"  #{rank} score={score:.5f} "
@@ -536,8 +542,13 @@ def retrieve_context(question, top_k=3):
     """Route pure time requests chronologically and named topics by exact scope."""
     if is_pure_time_query(question):
         return retrieve_time_based(question, top_k)
-    if detect_search_topics(question) or _requested_issue_date_any_position(question):
-        return retrieve_filtered_notices(question, top_k)
+    if (detect_search_topics(question) or _requested_issue_date_any_position(question)
+            or extract_year_from_question(question) is not None):
+        return retrieve_filtered_notices(
+            question, top_k,
+            sort_latest=bool(re.search(r"\b(?:latest|recent|most\s+recent)\b",
+                                       str(question or ""), re.I)),
+        )
     return retrieve_semantic(question, top_k)
 
 
@@ -752,35 +763,6 @@ def _question_scope_matches(question, record):
                          r"registration\s+portal)\b", text):
             return False
 
-        # For an explicitly requested *academic session*, require that very
-        # session. Merely containing 2026 in "2025-2026" is not a match for
-        # 2026-27; likewise the 2026 issue date does not imply AY 2026-27.
-        academic_request = re.search(
-            r"\b(?:academic\s+(?:year|session)|ay)\s*"
-            r"(20\d{2})\s*[-–—/]\s*(20\d{2}|\d{2})\b", q,
-        )
-        if academic_request:
-            start = int(academic_request.group(1))
-            end_text = academic_request.group(2)
-            end = int(end_text) if len(end_text) == 4 else (start // 100) * 100 + int(end_text)
-            requested_session = (start, end)
-
-            def sessions(value):
-                pairs = set()
-                for a, b in re.findall(r"\b(20\d{2})\s*[-–—/]\s*(20\d{2}|\d{2})\b", value):
-                    begin = int(a)
-                    finish = int(b) if len(b) == 4 else (begin // 100) * 100 + int(b)
-                    pairs.add((begin, finish))
-                return pairs
-
-            title_sessions = sessions(primary)
-            # The title's session identifies the circular. A different year
-            # mentioned in its historical context cannot override the title.
-            if title_sessions:
-                if requested_session not in title_sessions:
-                    return False
-            elif requested_session not in sessions(secondary):
-                return False
     if re.search(r"\bholidays?\b", q):
         if not re.search(r"\b(?:holidays?|puja|vacation|hostel\s+clos(?:ure|ed)|campus\s+clos(?:ure|ed))\b", primary):
             return False
@@ -817,26 +799,8 @@ def _question_scope_matches(question, record):
 
 
 def _year_scope_matches(record, year):
-    """Use the student-visible notice title as the primary year identity.
-
-    Inconsistent scraped/extracted titles must not enable a JELET-2025 notice
-    to satisfy a WBJEE-2026 search solely because its upload/issue date is in
-    2026 or another title field mentions 2026.
-    """
-    if year is None:
-        return True
-    sd = record.get("structured_data") or {}
-    for title in (sd.get("title"), record.get("title")):
-        title_years = set(int(y) for y in re.findall(r"\b20\d{2}\b", str(title or "")))
-        if title_years:
-            return year in title_years
-    summary = " ".join(str(x or "") for x in (
-        sd.get("summary"), sd.get("target_audience"), sd.get("key_points")
-    ))
-    summary_years = set(int(y) for y in re.findall(r"\b20\d{2}\b", summary))
-    if summary_years:
-        return year in summary_years
-    return parse_issue_date(record).year == year
+    """Use the official notice identity, never a session's ending year."""
+    return matches_identity_year(record, year)
 
 
 def _requested_issue_date_any_position(question):
@@ -898,6 +862,14 @@ def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
         return []
     topics = detect_search_topics(question)
     year = force_year if force_year is not None else extract_year_from_question(question)
+    sessions = academic_sessions(question)
+    session = requested_session(question, force_year=force_year)
+    # Multiple academic sessions are a comparison, not one unqualified target.
+    # A forced year must identify the matching session's *starting* year.
+    if (len(sessions) > 1 and session is None) or (
+        force_year is not None and sessions and session is None
+    ):
+        return []
     target_date = issue_date or _requested_issue_date_any_position(question)
     # A date request is narrower than a year request. Its calendar date is
     # already checked against the official issue_date.
@@ -908,6 +880,8 @@ def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
             continue
         if not _question_scope_matches(question, record):
             continue
+        if session is not None and not matches_session(record, session):
+            continue
         if target_date is not None and parse_issue_date(record).date() != target_date:
             continue
         issued_year_request = bool(re.search(
@@ -916,6 +890,7 @@ def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
         ))
         if target_date is None and year is not None:
             year_ok = (parse_issue_date(record).year == year if issued_year_request
+                       else True if session is not None
                        else _year_scope_matches(record, year))
             if not year_ok:
                 continue
@@ -937,6 +912,6 @@ def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
             break
     if DEBUG():
         print(f"[UniAI Retrieval] matched={len(selected)} selected={len(filtered)} "
-              f"topics={sorted(topics)} year={year} issue_date={target_date} "
+              f"topics={sorted(topics)} year={year} session={session} issue_date={target_date} "
               f"query={question!r}", flush=True)
     return filtered
