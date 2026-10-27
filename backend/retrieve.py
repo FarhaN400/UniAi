@@ -841,7 +841,12 @@ def _question_scope_matches(question, record):
     # A generic admission *notice* is about admissions, not hostel seats or
     # a refund circular. Fee questions for a named hostel notice are unaffected.
     if re.search(r"\b(?:admission\s+notices?|admissions?\s+circular)\b", q):
-        if not re.search(r"\badmissions?\b", primary):
+        # Admission-related notices can be titled "Counselling Schedule"
+        # or "Seat Allotment" even without the word "admission".
+        if not re.search(
+            r"\b(?:admissions?|counsell?ing|allott?ed\s+students?|"
+            r"seat\s+allotment)\b", primary
+        ):
             return False
         if re.search(r"\b(?:hostels?|accommodat|ragging)\b", primary):
             return False
