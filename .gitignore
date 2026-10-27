@@ -29,3 +29,7 @@ dist/
 
 # Downloaded working documents (keep source docs out of repo)
 *.pdf
+
+# Temporary local admission-fix patch and recovery backup
+/backend/ret.py
+/backend/retrieve.py.admission_fix.bak

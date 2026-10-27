@@ -291,8 +291,6 @@ UniAi/
 │   │   ├── phase5_isolated_e2e_test.py # Ephemeral end-to-end integration test
 │   │   └── README.md             # Scheduler & Phase 5 documentation
 │   │
-│   ├── Model/
-│   │   └── test_ollama.py        # Ollama local connection verification
 │   └── tests/                    # Regression test suites
 │
 ├── frontend/
