@@ -43,6 +43,50 @@ def saved_reply(st, question, answer, records=None, **kw):
 
 
 class FinalRetrievalRegressions(unittest.TestCase):
+    def test_admission_synonyms_route_to_strict_subject_search(self):
+        rows = [
+            notice("admissions", "Notice for B.Tech Direct Admission 2026"),
+            notice("counselling", "Counselling and Reporting Schedule for Students"),
+            notice("seats", "Decentralised Admission for Vacant Seats 2026"),
+            notice("hostel", "Hostel Allotment and Room Booking Notice",
+                   summary="Admission portal is now available"),
+            notice("refund", "Guidelines for Refund of Admission Fees"),
+            notice("ragging", "Anti-Ragging Committee and Admission Helpdesk"),
+            notice("scholarship", "Scholarship Scheme 2026",
+                   summary="Admission is required to apply"),
+        ]
+        ret = import_retrieve_offline(rows)
+        expected = {"admissions", "counselling", "seats"}
+        for question in (
+            "Give me the recent notice of addmission.",
+            "Show me the five most recent admission notices.",
+            "List latest admissions circulars.",
+        ):
+            with self.subTest(question=question):
+                found = ret.retrieve_filtered_notices(question, top_k=5,
+                                                      sort_latest=True)
+                self.assertEqual({r["notice_id"] for r in found}, expected)
+                self.assertEqual(ret.enforce_source_scope(question, rows), [
+                    rows[0], rows[1], rows[2],
+                ])
+
+    def test_generic_latest_is_unfiltered_and_named_topics_survive(self):
+        rows = [
+            notice("adm", "B.Tech Direct Admission Notice"),
+            notice("hostel", "Hostel Closure During Durga Puja"),
+            notice("exam", "University Examination Routine"),
+        ]
+        ret = import_retrieve_offline(rows)
+        self.assertTrue(ret.is_pure_time_query("Show five latest MAKAUT notices"))
+        self.assertFalse(ret.is_pure_time_query(
+            "Give me the recent notice of addmission."))
+        self.assertEqual(ret.detect_search_topics(
+            "Find WBJEE 2026 admission notices"), {"wbjee"})
+        self.assertEqual(ret.detect_search_topics(
+            "Show recent hostel notices"), {"hostel"})
+        self.assertEqual({r["notice_id"] for r in ret.retrieve_filtered_notices(
+            "Show recent hostel notices")}, {"hostel"})
+
     def test_q03_exclude_anti_ragging_and_refund_from_hostel(self):
         rows = [
             notice("hostel1", "Hostel Allotment Application for AY 2026-2027"),
