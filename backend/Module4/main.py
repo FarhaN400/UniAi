@@ -1549,7 +1549,8 @@ def _comparison_notice_answer(question, st):
 def ask_uniai(question, state=None):
     """Reliable entry point for notice search, follow-ups, and grounded Q&A."""
     from retrieve import (retrieve_filtered_notices, detect_search_topics,
-                          _requested_issue_date_any_position, enforce_source_scope)
+                          _requested_issue_date_any_position, enforce_source_scope,
+                          is_assessment_question, retrieve_flexible_context)
     from Module4.query_understanding import fallback_understand_query
     import logging
 
@@ -1581,6 +1582,12 @@ def ask_uniai(question, state=None):
             parsed = fallback_understand_query(question, st)
     else:
         parsed = fallback_understand_query(question, st)
+
+    # "Process of the new exam pattern" asks for a marking scheme, not
+    # admission or form-submission steps. Keep the user's original wording
+    # for the sourced RAG answer instead of forcing a procedural field.
+    if is_assessment_question(question) and parsed.requested_field == "procedure":
+        parsed.requested_field = None
 
     if parsed.intent == "casual_chat":
         # 'My name is Example Student.' is an explicit name statement despite
@@ -1627,6 +1634,13 @@ def ask_uniai(question, state=None):
         and bool(named_topics or explicit_year or re.search(
             r"\b(?:notices?|notifications?|latest|recent|new)\b", question, re.I))
     )
+    # A request for a new/revised assessment pattern is a new subject search
+    # even when another examination notice is active in the conversation.
+    if is_assessment_question(question) and re.search(
+        r"\b(?:new|latest|revised|updated|changed|current|next\s+semester)\b",
+        question, re.I
+    ) and not re.search(r"\b(?:this|that)\s+notice\b", question, re.I):
+        is_new_search = True
     # 'Give me its source' and 'show this notice's deadline' reuse the active
     # record even though their sentences start with a command verb.
     if active and not changed and not explicit_year and re.search(
@@ -1700,6 +1714,10 @@ def ask_uniai(question, state=None):
                 records = retrieve_time_based("notices published yesterday", top_k=count)
             else:
                 records = retrieve_time_based("latest university notices", top_k=count)
+        elif is_assessment_question(question):
+            # Subject synonyms first; bounded Pinecone discovery only if
+            # MongoDB cannot find a genuinely assessment-related notice.
+            records = retrieve_flexible_context(question, top_k=count)
         elif topic_specific or issue_date is not None or explicit_year:
             records = retrieve_filtered_notices(question, top_k=count,
                                                  sort_latest=bool(re.search(
