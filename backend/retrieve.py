@@ -1157,7 +1157,15 @@ def retrieve_flexible_context(question, top_k=5):
     if not is_assessment_question(question):
         return retrieve_context(question, top_k=top_k)
 
-    candidates = retrieve_filtered_notices(question, top_k=top_k)
+    # "new exam pattern" asks for the most recently issued relevant scheme,
+    # not whichever historical scheme repeats the most query terms.
+    wants_latest = bool(re.search(
+        r"\b(?:new|latest|recent|revised|updated|current)\b",
+        str(question or ""), re.I,
+    ))
+    candidates = retrieve_filtered_notices(
+        question, top_k=top_k, sort_latest=wants_latest,
+    )
     if candidates:
         return candidates
 
