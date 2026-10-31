@@ -7,6 +7,8 @@
 
 ## 🏗️ Architecture Overview
 
+**Visual data-flow diagrams:** [**Automated notice ingestion + student-query RAG flow**](../docs/architecture.md). These Mermaid diagrams show how GitHub Actions, the scraper, OCR/LLM extraction, MongoDB Atlas, Pinecone, FastAPI, session storage, and evidence verification connect.
+
 The UniAI backend coordinates the complete pipeline from university portal monitoring to real-time conversational serving:
 
 ```text
