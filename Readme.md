@@ -68,80 +68,24 @@ UniAI:   [Compares both notices, computes the exact date difference, and cites b
 
 ## 🏗️ System Architecture
 
-```text
-                      ┌──────────────────────────┐
-                      │    University Portal     │
-                      │  (makautwb.ac.in/p=340)  │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │        MODULE 1          │
-                      │  Automatic Web Scraper   │
-                      │  SHA-256 Deduplication   │
-                      │  In-Place Checksum Check │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │      MongoDB Atlas       │
-                      │  (status: "new")         │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │        MODULE 2          │
-                      │  Document Processing     │
-                      │  - Magic Bytes Check     │
-                      │  - PyPDF / 300 DPI OCR   │
-                      │  - Ollama / Groq LLM     │
-                      │  - Pydantic V2 Schema    │
-                      │  - Chunking & Merging    │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │      MongoDB Atlas       │
-                      │  (status: "processed")   │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │        MODULE 3          │
-                      │  Pinecone Vector Store   │
-                      │  - Retrieval Text Build  │
-                      │  - Year Tagging (20xx)   │
-                      │  - Serverless Upsert     │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │        MODULE 4          │
-                      │  Conversational RAG      │
-                      │  - 9-Intent Classifier   │
-                      │  - Conversational State  │
-                      │  - Dual-Path Retrieval   │
-                      │  - Server Claim Validate │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │        MODULE 6          │
-                      │  Full-Stack Application  │
-                      │  - FastAPI REST Gateway  │
-                      │  - React 18 + Vite UI    │
-                      │  - Verified Link Badges  │
-                      └────────────┬─────────────┘
-                                   │
-                                   ▼
-                      ┌──────────────────────────┐
-                      │   MODULE 5 (Scheduler)   │
-                      │  Automated Cloud Sync    │
-                      │  - GitHub Actions Cron   │
-                      │  - Atlas IP Auth v2      │
-                      │  - In-Place Hash Monitor │
-                      └──────────────────────────┘
+UniAI uses **two connected pipelines**: an automated notice-ingestion workflow and an on-demand conversational RAG workflow.
+
+```mermaid
+flowchart LR
+    PORTAL["MAKAUT notice portal"] --> INGEST["Scheduled ingestion<br/>scraper → PDF/OCR → structured extraction"]
+    ACTIONS["GitHub Actions<br/>every 3 hours"] --> INGEST
+    INGEST --> MONGO[("MongoDB Atlas<br/>official notices")]
+    MONGO --> INDEX["Metadata + embedding indexing"]
+    INDEX --> PINECONE[("Pinecone<br/>vector search")]
+    STUDENT["Student"] --> UI["React + Vite UI"]
+    UI --> API["FastAPI chat API"]
+    API --> RAG["Conversational RAG<br/>intent + hybrid retrieval + evidence checks"]
+    RAG --> MONGO
+    RAG --> PINECONE
+    RAG --> API
 ```
+
+**Explore the detailed, demo-friendly diagrams:** [**Ingestion pipeline + conversational RAG architecture →**](docs/architecture.md). This guide includes exact backend modules, source files, data flow, session persistence, and a video walkthrough.
 
 ---
 
