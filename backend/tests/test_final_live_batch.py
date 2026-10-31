@@ -43,6 +43,91 @@ def saved_reply(st, question, answer, records=None, **kw):
 
 
 class FinalRetrievalRegressions(unittest.TestCase):
+    def test_student_exam_pattern_finds_internal_assessment_not_routine(self):
+        rows = [
+            notice("routine", "University Examination Routine for Odd Semester 2026"),
+            notice("scheme", "Scheme of Internal Assessment for Theory and Practical "
+                   "Subjects and Submission of Internal Assessment Marks"),
+            notice("hostel", "Hostel Closure Notice",
+                   summary="Students should follow the revised exam pattern"),
+            notice("fees", "Examination Fee Payment Notice"),
+        ]
+        ret = import_retrieve_offline(rows)
+        questions = (
+            "Give me a process of the new exam pattern.",
+            "What is the new exam pattern?",
+            "How are internal marks calculated?",
+            "Tell me the assessment scheme for theory and practical subjects.",
+            "How are project and laboratory marks distributed?",
+        )
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertTrue(ret.is_assessment_question(question))
+                self.assertEqual(ret.detect_search_topics(question), {"exam"})
+                results = ret.retrieve_flexible_context(question, top_k=5)
+                self.assertEqual([r["notice_id"] for r in results], ["scheme"])
+                self.assertEqual([r["notice_id"] for r in
+                                  ret.enforce_source_scope(question, rows)], ["scheme"])
+
+    def test_assessment_query_expands_ocr_snippets_without_inventing_marks(self):
+        ret = import_retrieve_offline([])
+        raw = (
+            "INTERNAL ASSESSMENT. Theory assessment is listed separately.\n"
+            "The practical and laboratory components are defined in the table.\n"
+            "Submission of internal assessment marks shall follow the schedule.\n"
+        )
+        matches = ret.extract_relevant_snippets(
+            raw, "Give me a process of the new exam pattern.",
+            max_snippets=3,
+        )
+        self.assertTrue(matches)
+        self.assertTrue(any("INTERNAL ASSESSMENT" in x for x in matches))
+        self.assertFalse(any("30 marks" in x for x in matches))
+
+    def test_assessment_semantic_fallback_still_requires_official_subject(self):
+        rows = [
+            notice("scheme", "Internal Assessment Scheme for Practical Subjects"),
+            notice("routine", "Semester Examination Routine"),
+        ]
+        ret = import_retrieve_offline(rows)
+        original = ret.retrieve_filtered_notices
+        semantic_calls = []
+        def semantic_stub(question, top_k=5):
+            semantic_calls.append(question)
+            return [rows[1], rows[0]]
+        with patch.object(ret, "retrieve_filtered_notices", return_value=[]):
+            with patch.object(ret, "retrieve_semantic", side_effect=semantic_stub):
+                matched = ret.retrieve_flexible_context(
+                    "What is the new exam pattern?", top_k=3)
+        self.assertEqual([r["notice_id"] for r in matched], ["scheme"])
+        self.assertIn("internal assessment scheme", semantic_calls[0])
+        self.assertEqual([r["notice_id"] for r in original(
+            "What is the new exam pattern?", top_k=3)], ["scheme"])
+
+    def test_specific_session_query_does_not_fallback_semantically(self):
+        rows = [notice("new", "Internal Assessment Scheme 2026-27")]
+        ret = import_retrieve_offline(rows)
+        with patch.object(ret, "retrieve_filtered_notices", return_value=[]):
+            with patch.object(ret, "retrieve_semantic") as semantic:
+                self.assertEqual(ret.retrieve_flexible_context(
+                    "What is the internal assessment scheme for 2025-26?"), [])
+                semantic.assert_not_called()
+
+    def test_entrance_exam_and_exam_routine_remain_strict(self):
+        rows = [
+            notice("scheme", "Scheme of Internal Assessment for Theory and Practical"),
+            notice("routine", "Examination Routine for Odd Semester 2026"),
+            notice("jeca", "JECA-2026 Admission Reporting Notice"),
+        ]
+        ret = import_retrieve_offline(rows)
+        self.assertFalse(ret.is_assessment_question("What is the JECA exam pattern?"))
+        self.assertFalse(ret.is_assessment_question("Find the exam timetable"))
+        self.assertEqual([r["notice_id"] for r in ret.retrieve_filtered_notices(
+            "Find the latest examination routine notice.", sort_latest=True)],
+            ["routine"])
+        self.assertEqual([r["notice_id"] for r in ret.retrieve_filtered_notices(
+            "Find JECA-2026 admission notice")], ["jeca"])
+
     def test_admission_synonyms_route_to_strict_subject_search(self):
         rows = [
             notice("admissions", "Notice for B.Tech Direct Admission 2026"),
