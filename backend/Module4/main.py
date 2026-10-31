@@ -1407,6 +1407,86 @@ def _no_matches(question):
             "or check the official MAKAUT notice board.")
 
 
+def _is_unqualified_allotment_guidance(question):
+    """A student has a seat but hasn't identified the admission year/round.
+
+    Avoid a universal admission procedure or an LLM-generated checklist taken
+    from a potentially different year's official PDF.
+    """
+    q = str(question or "").casefold()
+    if re.search(r"\b20\d{2}\b", q):
+        return False
+    if not re.search(r"\b(?:wbjeeb?|jelet|jeca|jemat|pget|cet)\b", q):
+        return False
+    seat = re.search(
+        r"\b(?:got|received|allott?ed|secured|obtained)\b.{0,50}"
+        r"\b(?:a\s+)?(?:seat|allotment)\b|"
+        r"\b(?:seat|allotment)\b.{0,50}"
+        r"\b(?:got|received|allott?ed|secured)\b", q
+    )
+    next_step = re.search(
+        r"\b(?:what\s+(?:should|do|can)\s+i\s+do|"
+        r"what\s+(?:do|are)\s+i\s+(?:do|need)|"
+        r"next\s+steps?|what\s+happens?\s+next|"
+        r"how\s+(?:do|can)\s+i\s+proceed)\b", q
+    )
+    return bool(seat and next_step)
+
+
+def _allotment_guidance_choices(question, records):
+    """Show distinct official candidates without inventing universal steps."""
+    exam = re.search(r"\b(?:wbjeeb?|jelet|jeca|jemat|pget|cet)\b",
+                     str(question or ""), re.I)
+    label = exam.group(0).upper() if exam else "your admission"
+    # Admission reporting is more relevant to an allotted student than
+    # portal-closure or unrelated administrative circulars.
+    prioritized = sorted(records, key=lambda record: (
+        bool(re.search(r"\b(?:reporting|verification|allott?ed|counsell?ing)\b",
+                       _record_heading(record), re.I)),
+        bool(re.search(r"\badmissions?\b", _record_heading(record), re.I)),
+    ), reverse=True)
+    chosen = prioritized[:3]
+    prompt = (
+        f"Congratulations on your {label} allotment. The next steps depend "
+        "on your allotment year, course and counselling round. "
+        "Which year and round were you allotted? I won't assume that one "
+        "year's reporting dates or documents apply to another."
+    )
+    if chosen:
+        prompt += ("\n\nRelated official notices to check:\n\n"
+                   + format_notice_list(chosen))
+    return prompt, chosen
+
+
+def _is_generic_admission_documents(question, field, named_topics):
+    """An unqualified admission checklist must not inherit a hostel PDF."""
+    q = str(question or "").casefold()
+    return bool(
+        field == "documents"
+        and "admission" in named_topics
+        and not (set(named_topics) & {"wbjee", "jelet", "jeca",
+                                      "jemat", "pget", "cet"})
+        and not re.search(r"\b20\d{2}\b", q)
+        and not re.search(r"\b(?:this|that|same)\s+(?:notice|circular)\b|"
+                          r"\b(?:its|of\s+it)\b", q)
+    )
+
+
+def _admission_document_choices(records):
+    """Ask for an admission process before applying any particular checklist."""
+    chosen = list(records[:3])
+    lines = [
+        "Admission document requirements depend on the entrance exam, "
+        "academic year, counselling round and course. Which admission "
+        "process and year do you mean (for example, WBJEE 2026)?",
+    ]
+    if chosen:
+        lines.append("Here are relevant official notices for you to select:")
+        for i, record in enumerate(chosen, 1):
+            lines.append(f"{i}. {_record_heading(record)}\n   {_record_source(record)}")
+    return "\n\n".join(lines), chosen
+
+
 def _safe_grounded_answer(question, records, st, *, preserve=False):
     """Use existing LLM+evidence checks; recover gracefully from provider failures."""
     import logging
@@ -1741,6 +1821,10 @@ def ask_uniai(question, state=None):
     # A named NEW topic or year always overrides a previous active notice.
     active = st.get_active_notice()
     changed = explicitly_changes_notice_topic(question, active)
+    if changed:
+        # A failed search or answer-service request must not leave the old
+        # hostel/holiday document active for later admission questions.
+        st.clear_active_notice()
     named_topics = detect_search_topics(question)
     explicit_year = re.search(r"\b(20\d{2})\b", question)
     is_new_search = bool(re.search(r"\b(?:find|search|list)\b", question, re.I)) or (
@@ -1835,7 +1919,8 @@ def ask_uniai(question, state=None):
         elif topic_specific or issue_date is not None or explicit_year:
             records = retrieve_filtered_notices(question, top_k=count,
                                                  sort_latest=bool(re.search(
-                                                     r"\b(?:latest|recent|most\s+recent)\b", question, re.I)))
+                                                     r"\b(?:latest|recent|most\s+recent)\b", question, re.I))
+                                                 or _is_unqualified_allotment_guidance(question))
         else:
             records = retrieve_context(question, top_k=count)
         # Defense in depth: no source may be cited if its notice topic fails
@@ -1856,6 +1941,20 @@ def ask_uniai(question, state=None):
         else:
             reply = _no_matches(question)
         return _save_reply(st, question, reply, records=[])
+
+    if _is_unqualified_allotment_guidance(question):
+        # Never call an answer service to guess a procedure for an unspecified
+        # WBJEE/JELET year and round: provide related official notice choices.
+        message, chosen = _allotment_guidance_choices(question, records)
+        return _save_reply(st, question, message, records=chosen)
+
+    if _is_generic_admission_documents(
+        question, getattr(parsed, "requested_field", None), named_topics
+    ):
+        # A hostel notice or another admission round cannot supply a
+        # universal document checklist for an under-specified query.
+        message, chosen = _admission_document_choices(records)
+        return _save_reply(st, question, message, records=chosen)
 
     if is_assessment_question(question) and not _is_list_request(question, parsed):
         # Reuse verified source metadata and saved extraction without a

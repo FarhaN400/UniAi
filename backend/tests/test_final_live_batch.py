@@ -355,6 +355,185 @@ class FinalRoutingRegressions(unittest.TestCase):
         self.assertIn("https://makautwb.ac.in/old.pdf", response)
         self.assertIn("https://makautwb.ac.in/new.pdf", response)
 
+    def test_generic_admission_is_a_new_topic_after_hostel(self):
+        hostel = notice("hostel", "Hostel Closure during Durga Puja Festival",
+                        summary="Admission applicants may also use the hostel")
+        ns = offline_funcs(
+            "Module4/query_understanding.py",
+            {"_detect_explicit_topic_or_entity", "explicitly_changes_notice_topic"},
+            {
+                "TOPIC_MARKERS": {
+                    "hostel": r"\bhostels?\b",
+                    "admission": r"\b(?:admissions?|addmissions?)\b",
+                },
+                "academic_sessions": lambda text: [],
+                "matches_session": lambda *args: False,
+            },
+        )
+        self.assertEqual(ns["_detect_explicit_topic_or_entity"](
+            "What papers should I carry for admission?"), "admission")
+        self.assertEqual(ns["_detect_explicit_topic_or_entity"](
+            "Any addmission documents?"), "admission")
+        self.assertTrue(ns["explicitly_changes_notice_topic"](
+            "What papers should I carry for admission?", hostel))
+        self.assertFalse(ns["explicitly_changes_notice_topic"](
+            "What is its official source?", hostel))
+
+    def test_real_fallback_parser_does_not_reuse_hostel(self):
+        from Module4.conversation_state import ConversationState
+        hostel = notice("hostel", "Hostel Closure During Durga Puja",
+                        summary="Mentions admission in a footnote")
+        st = ConversationState()
+        st.set_active_notice(hostel)
+        markers = {
+            "hostel": r"\bhostels?\b",
+            "admission": r"\b(?:admissions?|addmissions?)\b",
+        }
+        switches = offline_funcs(
+            "Module4/query_understanding.py",
+            {"_detect_explicit_topic_or_entity", "explicitly_changes_notice_topic"},
+            {"TOPIC_MARKERS": markers,
+             "academic_sessions": lambda text: [],
+             "matches_session": lambda *args: False},
+        )
+        query = offline_funcs(
+            "Module4/query_understanding.py",
+            {"_detect_explicit_topic_or_entity", "fallback_understand_query"},
+            {
+                "_is_conversational_casual": lambda q: False,
+                "_explicit_temporal_notice_request": lambda q: None,
+                "_extract_ordinal_from_text": lambda q: None,
+                "_extract_requested_field": lambda q: (
+                    "documents" if "papers" in q.lower() else None
+                ),
+                "_extract_count_from_text": lambda q: None,
+                "explicitly_changes_notice_topic": switches[
+                    "explicitly_changes_notice_topic"
+                ],
+                "QueryUnderstandingResult": types.SimpleNamespace,
+            },
+        )
+        result = query["fallback_understand_query"](
+            "What papers should I carry for admission?", st)
+        self.assertEqual(result.intent, "topic_search")
+        self.assertFalse(result.use_active_notice)
+        self.assertEqual(result.requested_field, "documents")
+
+    def test_wbjee_allotment_guidance_never_invents_universal_steps(self):
+        ns = self._main("_is_unqualified_allotment_guidance",
+                        "_allotment_guidance_choices", extra={
+                            "format_notice_list": lambda rows: "\n".join(
+                                record_title(r) + " " + record_source(r) for r in rows
+                            )
+                        })
+        question = "I got a seat through WBJEE. What should I do next?"
+        self.assertTrue(ns["_is_unqualified_allotment_guidance"](question))
+        self.assertFalse(ns["_is_unqualified_allotment_guidance"](
+            "Give me the WBJEE 2026 reporting instructions"))
+        notices = [
+            notice("portal", "Closure of Registration Portal for WBJEE 2026"),
+            notice("report", "WBJEEB-2026 Admission Reporting and Document Verification"),
+        ]
+        answer, chosen = ns["_allotment_guidance_choices"](question, notices)
+        self.assertIn("Which year and round", answer)
+        self.assertIn("WBJEEB-2026 Admission Reporting", answer)
+        self.assertEqual(chosen[0]["notice_id"], "report")
+        self.assertNotIn("carry Aadhaar", answer)
+
+    def test_ambiguous_admission_documents_request_asks_for_process(self):
+        ns = self._main("_is_generic_admission_documents",
+                        "_admission_document_choices")
+        q = "What papers should I carry for admission?"
+        self.assertTrue(ns["_is_generic_admission_documents"](
+            q, "documents", {"admission"}))
+        self.assertFalse(ns["_is_generic_admission_documents"](
+            "What documents do I need for WBJEE 2026?", "documents", {"wbjee"}))
+        notices = [
+            notice("wbjee", "WBJEEB-2026 Admission Document Verification"),
+            notice("hostel", "Hostel Closure"),
+        ]
+        answer, chosen = ns["_admission_document_choices"](notices[:1])
+        self.assertIn("Which admission process and year", answer)
+        self.assertIn("https://makautwb.ac.in/wbjee.pdf", answer)
+        self.assertEqual([r["notice_id"] for r in chosen], ["wbjee"])
+
+    def test_live_chat_clears_hostel_on_failure_and_stays_on_admission(self):
+        from Module4.conversation_state import ConversationState
+        hostel = notice("hostel", "Hostel Closure during Durga Puja Festival",
+                        summary="Admission rules are mentioned on another page")
+        wbjee = notice("wbjee", "WBJEEB-2026 Document Verification and Admission Reporting")
+        other = notice("other", "B.Tech Direct Admission Guidelines 2026")
+        ret = import_retrieve_offline([hostel, wbjee, other])
+        st = ConversationState()
+        st.append_turn("When do we leave the hostel during Puja?",
+                       "Hostel closure information", records=[hostel],
+                       active_notice=hostel)
+
+        change = offline_funcs(
+            "Module4/query_understanding.py",
+            {"explicitly_changes_notice_topic"},
+            {"TOPIC_MARKERS": {
+                "hostel": r"\bhostels?\b",
+                "admission": r"\b(?:admissions?|addmissions?)\b",
+                "wbjee": r"\bwbjeeb?\b",
+            },
+             "academic_sessions": lambda text: [],
+             "matches_session": lambda *args: False},
+        )["explicitly_changes_notice_topic"]
+        parser_mod = types.ModuleType("Module4.query_understanding")
+        parser_mod.fallback_understand_query = lambda q, state=None: types.SimpleNamespace(
+            intent="topic_search", count=None, requested_field=(
+                "documents" if "papers" in q.lower() else None
+            ), use_active_notice=False,
+        )
+        ns = self._main(
+            "ask_uniai", "_save_reply", "_is_unqualified_allotment_guidance",
+            "_allotment_guidance_choices", "_is_generic_admission_documents",
+            "_admission_document_choices",
+            extra={
+                "ConversationState": ConversationState,
+                "explicitly_changes_notice_topic": change,
+                "_out_of_scope": lambda q: False,
+                "_is_comparison_query": lambda q: False,
+                "extract_requested_count": lambda q: None,
+                "_is_single_target": lambda q, p: False,
+                "_is_list_request": lambda q, p=None: False,
+                "_direct_fact_answer": lambda *args: None,
+                "_field_answer": lambda q, record, field=None: (
+                    "WRONG HOSTEL FOLLOW-UP" if "Hostel" in record_title(record)
+                    else None
+                ),
+                "_no_matches": lambda q: "No matching notice",
+                "format_notice_list": lambda rows: "\n".join(
+                    record_title(r) + " " + record_source(r) for r in rows),
+                "_safe_grounded_answer": lambda question, rows, state, **kw:
+                    ns["_save_reply"](state, question, "Answer service temporarily "
+                                       "unavailable", records=[]),
+                "os": __import__("os"),
+            },
+        )
+        with patch.dict(sys.modules, {
+            "retrieve": ret,
+            "Module4.query_understanding": parser_mod,
+        }):
+            # Simulate a failed provider answer when the student changes from
+            # hostel to WBJEE. The old hostel notice must be cleared.
+            first = ns["ask_uniai"](
+                "Tell me about WBJEE 2026 admission reporting", state=st)
+            self.assertIn("temporarily unavailable", first)
+            self.assertIsNone(st.get_active_notice())
+
+            # Next vague admission question must search admissions afresh,
+            # never run an answer-document lookup against the hostel notice.
+            second = ns["ask_uniai"](
+                "What papers should I carry for admission?", state=st)
+            self.assertIn("Which admission process and year", second)
+            self.assertNotIn("Hostel Closure", second)
+            self.assertNotIn("WRONG HOSTEL", second)
+            self.assertTrue(st.get_last_answer_records())
+            self.assertTrue(all("Hostel" not in record_title(r)
+                                for r in st.get_last_answer_records()))
+
     def test_q11_issued_yesterday_is_temporal_not_generic_search(self):
         f = offline_funcs("Module4/query_understanding.py",
                           {"_explicit_temporal_notice_request"}, {
