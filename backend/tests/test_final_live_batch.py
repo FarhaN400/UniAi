@@ -290,6 +290,71 @@ class FinalRoutingRegressions(unittest.TestCase):
         ns.update(extra or {})
         return offline_funcs("Module4/main.py", set(names), ns)
 
+    def test_informal_exam_pattern_returns_sourced_assessment_facts(self):
+        record = notice("assessment",
+                        "Scheme of Internal Assessment for Theory and Practical Subjects")
+        record["structured_data"]["summary"] = (
+            "Defines the internal assessment scheme for theory and practical subjects."
+        )
+        record["structured_data"]["key_points"] = [
+            "Theory internal assessment carries 30 marks: 15 for CA, "
+            "10 for Assignment/Quiz, and 5 for Attendance/Participation.",
+            "Practical assessment is awarded by the concerned faculty "
+            "based on PCA records.",
+        ]
+        ns = self._main("_assessment_answer_from_records", extra={
+            "_plain": str,
+            "display_summary": lambda r: (r["structured_data"]["summary"], None),
+        })
+        for q in (
+            "Give me the process of the new exam pattern.",
+            "How are internal marks calculated?",
+            "What is the marking scheme for theory and practical subjects?",
+        ):
+            with self.subTest(q=q):
+                message, cited = ns["_assessment_answer_from_records"](q, [record])
+                self.assertIn("Scheme of Internal Assessment", message)
+                self.assertIn("Official source: https://makautwb.ac.in/assessment.pdf", message)
+                self.assertNotIn("could not find this information", message)
+                self.assertEqual(cited, [record])
+        message, _ = ns["_assessment_answer_from_records"](
+            "Give me the process of the new exam pattern.", [record])
+        self.assertIn("internal assessment", message.casefold())
+        self.assertIn("not be taken", message.casefold())
+
+    def test_project_laboratory_marks_never_invent_specific_allocation(self):
+        record = notice("assessment", "Internal Assessment Scheme for Practical Subjects")
+        record["structured_data"]["key_points"] = [
+            "Practical assessment uses PCA records evaluated by the faculty."
+        ]
+        ns = self._main("_assessment_answer_from_records", extra={
+            "_plain": str,
+            "display_summary": lambda r: (None, None),
+        })
+        response, cited = ns["_assessment_answer_from_records"](
+            "How are project and laboratory marks distributed?", [record])
+        self.assertIn("Practical assessment uses PCA records", response)
+        self.assertIn("project-marks allocation couldn't be verified", response)
+        self.assertIn("laboratory-marks allocation couldn't be verified", response)
+        self.assertNotIn("30 marks", response)
+        self.assertEqual(cited, [record])
+
+    def test_ambiguous_assessment_notices_offer_named_choices(self):
+        rows = [
+            notice("old", "Assessment Scheme for Theory 2025"),
+            notice("new", "Assessment Scheme for Theory 2026"),
+        ]
+        ns = self._main("_assessment_answer_from_records", extra={
+            "_plain": str,
+            "display_summary": lambda r: (None, None),
+        })
+        response, cited = ns["_assessment_answer_from_records"](
+            "How are internal marks calculated?", rows)
+        self.assertIn("Please choose the relevant notice", response)
+        self.assertEqual(cited, rows)
+        self.assertIn("https://makautwb.ac.in/old.pdf", response)
+        self.assertIn("https://makautwb.ac.in/new.pdf", response)
+
     def test_q11_issued_yesterday_is_temporal_not_generic_search(self):
         f = offline_funcs("Module4/query_understanding.py",
                           {"_explicit_temporal_notice_request"}, {
