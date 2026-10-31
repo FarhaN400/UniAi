@@ -229,6 +229,11 @@ def extract_relevant_snippets(raw_text, question, max_snippets=2, max_chars=450)
     if not raw_text or not question or max_snippets <= 0:
         return []
     tokens = set(_tokens(question))
+    if is_assessment_question(question):
+        # The OCR may say "internal assessment" rather than "exam pattern".
+        # Keep exact text snippets; never fabricate marks or percentages.
+        tokens.update({"internal", "assessment", "marks", "theory",
+                       "practical", "laboratory", "project", "weightage"})
     if not tokens:
         return []
     lines = [line.strip() for line in str(raw_text).splitlines() if line.strip()]
