@@ -1087,6 +1087,120 @@ def _structured_notice_overview(record, *, max_points=9):
     return "\n".join(lines)
 
 
+def _assessment_answer_from_records(question, records):
+    """Answer academic marking questions directly from extracted notice facts.
+
+    The existing LLM validation remains in place for other query types. Broad
+    assessment wording should not require a second Groq call merely to repeat
+    the recorded scheme. Use only stored facts and cite the selected PDF.
+    """
+    if not records:
+        return None
+    lower = str(question or "").casefold()
+
+    # Without a year/semester/course, several assessment circulars could
+    # refer to different schemes. Do not synthesize a universal rule.
+    latest = bool(re.search(r"\b(?:new|latest|recent|updated|revised|current)\b", lower))
+    if len(records) > 1 and not latest:
+        choices = "\n".join(
+            f"{idx}. {_record_heading(record)}\n   {_record_source(record)}"
+            for idx, record in enumerate(records[:4], 1)
+        )
+        return (
+            "I found several assessment-related MAKAUT notices. "
+            "Please choose the relevant notice before I describe its "
+            "marking scheme:\n" + choices,
+            records[:4],
+        )
+
+    record = records[0]
+    sd = record.get("structured_data") or {}
+    title = _record_heading(record)
+    source = _record_source(record)
+    points = sd.get("key_points") or []
+    if not isinstance(points, (list, tuple)):
+        points = [points]
+    facts = []
+    for point in points:
+        value = _plain(point)
+        if value and value not in facts:
+            facts.append(value)
+
+    # Students asking "exam pattern" usually mean the newly published
+    # internal-assessment scheme, not the complete end-semester timetable.
+    asks_project = bool(re.search(r"\bprojects?\b", lower))
+    asks_lab = bool(re.search(r"\b(?:laborator(?:y|ies)|labs?)\b", lower))
+    asks_practical = bool(re.search(r"\bpracticals?\b", lower))
+    asks_theory = bool(re.search(r"\btheory\b", lower))
+    specific = asks_project or asks_lab or asks_practical or asks_theory
+
+    if specific:
+        selected = []
+        for fact in facts:
+            if (asks_project and re.search(r"\bprojects?\b", fact, re.I)
+                    or (asks_lab or asks_practical) and re.search(
+                        r"\b(?:laborator(?:y|ies)|labs?|practicals?|pca)\b", fact, re.I
+                    )
+                    or asks_theory and re.search(
+                        r"\b(?:theory|continuous\s+assessments?|\bca\b|assignment|quiz|attendance)\b",
+                        fact, re.I,
+                    )):
+                selected.append(fact)
+        facts = selected
+    else:
+        facts = [
+            fact for fact in facts
+            if re.search(
+                r"\b(?:internal|assessment|marks?|theory|practicals?|"
+                r"laborator(?:y|ies)|labs?|projects?|grading|"
+                r"evaluation|quiz|assignment|attendance|pca|ca)\b",
+                fact, re.I,
+            )
+        ]
+
+    lines = [f"According to the MAKAUT notice '{title}':"]
+    if sd.get("issue_date"):
+        lines.append(f"Issued: {_plain(sd['issue_date'])}")
+
+    summary, warning = display_summary(record)
+    if summary and not specific:
+        lines.append(f"Overview: {_plain(summary)}")
+    if warning:
+        lines.append(f"Extraction warning: {warning}")
+
+    if facts:
+        lines.append("Assessment details recorded in the notice:")
+        lines.extend(f"- {fact[:700]}" for fact in facts[:8])
+    elif summary and not specific:
+        pass  # The safe extracted summary above already describes the notice.
+    else:
+        lines.append(
+            "I found a related assessment notice, but I couldn't verify "
+            "the requested breakdown from its extracted details. "
+            "Please check the original PDF."
+        )
+
+    if asks_project and not any(re.search(r"\bprojects?\b", fact, re.I) for fact in facts):
+        lines.append(
+            "A separate project-marks allocation couldn't be verified "
+            "from the extracted details; don't assume it equals practical marks."
+        )
+    if asks_lab and not any(re.search(r"\b(?:labs?|laborator(?:y|ies))\b", fact, re.I) for fact in facts):
+        lines.append(
+            "A separate laboratory-marks allocation couldn't be verified "
+            "from the extracted details; the practical-assessment scheme "
+            "may be relevant, but is not proof of a separate lab allocation."
+        )
+    if re.search(r"\b(?:exam|examination)\s+pattern\b", lower):
+        lines.append(
+            "This notice concerns internal assessment; it should not be taken "
+            "as the complete end-semester examination pattern."
+        )
+
+    lines.append(source)
+    return "\n".join(lines), [record]
+
+
 def _field_answer(question, record, field=None):
     """Answer high-confidence field questions without risky unvalidated LLM text.
 
@@ -1742,6 +1856,17 @@ def ask_uniai(question, state=None):
         else:
             reply = _no_matches(question)
         return _save_reply(st, question, reply, records=[])
+
+    if is_assessment_question(question) and not _is_list_request(question, parsed):
+        # Reuse verified source metadata and saved extraction without a
+        # variable-cost Groq call on broad, everyday assessment questions.
+        assessment = _assessment_answer_from_records(question, records)
+        if assessment is not None:
+            text, cited = assessment
+            return _save_reply(
+                st, question, text, records=cited,
+                active=cited[0] if len(cited) == 1 else None,
+            )
 
     if (len(records) > 1 and not is_pure_latest
             and not _is_list_request(question, parsed)
