@@ -499,7 +499,10 @@ class FinalRoutingRegressions(unittest.TestCase):
                 "_is_single_target": lambda q, p: False,
                 "_is_list_request": lambda q, p=None: False,
                 "_direct_fact_answer": lambda *args: None,
-                "_field_answer": lambda *args: "WRONG HOSTEL FOLLOW-UP",
+                "_field_answer": lambda q, record, field=None: (
+                    "WRONG HOSTEL FOLLOW-UP" if "Hostel" in record_title(record)
+                    else None
+                ),
                 "_no_matches": lambda q: "No matching notice",
                 "format_notice_list": lambda rows: "\n".join(
                     record_title(r) + " " + record_source(r) for r in rows),
