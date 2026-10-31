@@ -638,6 +638,70 @@ def _phrase_regex(words):
     ), re.I)
 
 
+
+# Students often say "exam pattern" when the circular is titled "internal
+# assessment". These rules describe a broad *academic assessment* request;
+# named admission exams, routine searches and exact-date constraints retain
+# their established strict routing.
+_ASSESSMENT_QUESTION = re.compile(
+    r"\b(?:exams?|examinations?)\s+(?:patterns?|formats?|structures?|"
+    r"schemes?|systems?|marking|marks?|assessments?|evaluations?)\b|"
+    r"\b(?:internal|continuous)\s+(?:assessments?|marks?|evaluations?)\b|"
+    r"\b(?:assessment|evaluation|grading|marking|marks?)\s+"
+    r"(?:schemes?|patterns?|distributions?|breakdowns?|splits?|"
+    r"weightages?|allocations?)\b|"
+    r"\b(?:distribution|breakdown|weightage|allocation)\s+of\s+(?:marks?|grades?)\b|"
+    r"\b(?:theory|practicals?|laborator(?:y|ies)|labs?|projects?|"
+    r"sessional)\b.{0,65}\b(?:marks?|assessment|evaluation|weightage|grading)\b|"
+    r"\b(?:marks?|assessment|evaluation|weightage|grading)\b.{0,65}"
+    r"\b(?:theory|practicals?|laborator(?:y|ies)|labs?|projects?)\b|"
+    r"\b(?:exam|semester|subject|course)\s+(?:marks?|grading|assessment)\b",
+    re.I,
+)
+_ASSESSMENT_NOTICE = re.compile(
+    r"\b(?:internal|continuous)\s+assessments?\b|"
+    r"\b(?:assessments?|evaluations?|marking|grading)\s+"
+    r"(?:schemes?|patterns?|marks?|structures?)\b|"
+    r"\b(?:schemes?|patterns?|structures?)\s+of\s+"
+    r"(?:internal\s+)?(?:assessments?|evaluations?|examinations?)\b|"
+    r"\b(?:exams?|examinations?)\s+(?:patterns?|schemes?|"
+    r"structures?|marking|marks?|evaluations?)\b|"
+    r"\b(?:marks?|grades?)\s+(?:distribution|breakdown|allocation|"
+    r"weightage|scheme|pattern)\b|"
+    r"\b(?:theory|practicals?|laborator(?:y|ies)|labs?|projects?)\b"
+    r".{0,65}\b(?:marks?|assessments?|evaluations?|weightage)\b",
+    re.I,
+)
+
+
+def is_assessment_question(question):
+    """Academic marking question, not a named entrance examination."""
+    text = str(question or "")
+    if re.search(r"\b(?:wbjeeb?|jelet|jeca|jemat|pget|cet)\b", text, re.I):
+        return False
+    return bool(_ASSESSMENT_QUESTION.search(text))
+
+
+def is_assessment_notice(record):
+    """Use the circular's actual title, not incidental keywords in its body."""
+    sd = record.get("structured_data") or {}
+    titles = " ".join(str(x or "") for x in (record.get("title"), sd.get("title")))
+    if re.search(r"\b(?:hostels?|ragging|refunds?)\b", titles, re.I):
+        return False
+    return bool(_ASSESSMENT_NOTICE.search(titles))
+
+
+def expand_academic_query(question):
+    """Additional semantic vocabulary; does not change evidence requirements."""
+    text = str(question or "").strip()
+    if is_assessment_question(text):
+        return text + (
+            " internal assessment scheme marks distribution theory practical "
+            "laboratory project evaluation academic examination"
+        )
+    return text
+
+
 def detect_search_topics(question):
     """Return explicitly named subject categories, not guessed intent."""
     lower = str(question or "").casefold()
@@ -645,6 +709,8 @@ def detect_search_topics(question):
     for topic, aliases in SEARCH_TOPICS.items():
         if _phrase_regex(aliases).search(lower):
             found.add(topic)
+    if is_assessment_question(question):
+        found.add("exam")
     # 'face registration' is more specific than generic registration.
     if "frams" in found:
         found.discard("registration")
@@ -766,15 +832,18 @@ def _search_topic_matches(record, topics):
             r"\b(?:holidays?|puja|vacations?|closure|closed)\b", title
         ):
             return False
-        if topic == "exam" and not re.search(
-            r"\b(?:exams?|examinations?|semester|routines?|timetables?|"
-            r"time[ -]?tables?|schedule|programme|program)\b", title
+        if topic == "exam" and not (
+            re.search(
+                r"\b(?:exams?|examinations?|semester|routines?|timetables?|"
+                r"time[ -]?tables?|schedule|programme|program)\b", title
+            ) or is_assessment_notice(record)
         ):
             return False
     # A query naming several subjects should not be satisfied by a single
     # incidental mention of only one of them.
     return all(
-        _phrase_regex(SEARCH_TOPICS[topic]).search(primary)
+        (topic == "exam" and is_assessment_notice(record))
+        or _phrase_regex(SEARCH_TOPICS[topic]).search(primary)
         or (topic not in title_scoped
             and _phrase_regex(SEARCH_TOPICS[topic]).search(secondary))
         for topic in topics
@@ -789,6 +858,10 @@ def _question_scope_matches(question, record):
     queries. It never invents a document when none fits the requested scope.
     """
     q = str(question or "").casefold()
+    if is_assessment_question(question) and not is_assessment_notice(record):
+        # A timetable, fee circular or generic examination notice cannot
+        # answer a marking-scheme question just because it mentions "exam".
+        return False
     sd = record.get("structured_data") or {}
     primary = " ".join(str(x or "") for x in (
         record.get("title"), sd.get("title"),
@@ -994,6 +1067,8 @@ def _notice_search_score(question, record):
             score += 6.0
         elif re.search(pat, secondary):
             score += 2.0
+    if is_assessment_question(question) and is_assessment_notice(record):
+        score += 12.0
     return score
 
 
@@ -1063,3 +1138,30 @@ def retrieve_filtered_notices(question, top_k=5, *, force_year=None,
               f"topics={sorted(topics)} year={year} session={session} issue_date={target_date} "
               f"query={question!r}", flush=True)
     return filtered
+
+
+
+def retrieve_flexible_context(question, top_k=5):
+    """Find a broad academic fact despite students' non-official vocabulary.
+
+    First search the processed MongoDB titles with semantic *concept* aliases.
+    Only if there is no scoped result, use Pinecone as a discovery fallback.
+    A fallback may not bypass the original question's notice-subject guard.
+    Precise year/session, entrance-exam and calendar-date queries never widen.
+    """
+    if not is_assessment_question(question):
+        return retrieve_context(question, top_k=top_k)
+
+    candidates = retrieve_filtered_notices(question, top_k=top_k)
+    if candidates:
+        return candidates
+
+    if (extract_year_from_question(question) is not None
+            or _requested_issue_date_any_position(question) is not None
+            or _explicit_issue_date(question) is not None):
+        return []
+
+    semantic = retrieve_semantic(
+        expand_academic_query(question), top_k=max(12, min(24, top_k * 3))
+    )
+    return enforce_source_scope(question, semantic)[:max(0, int(top_k))]
