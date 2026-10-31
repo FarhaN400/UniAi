@@ -367,6 +367,7 @@ def _detect_explicit_topic_or_entity(text):
         ("jemat", r"\b(?:wbjemat|jemat)\b"),
         ("pget", r"\bpget\b"),
         ("cet", r"\bcet\b"),
+        ("admission", r"\b(?:admissions?|addmissions?)\b"),
         ("hostel", r"\bhostels?\b"),
         ("holiday", r"\b(?:holidays?|puja|vacation)\b"),
         ("frams", r"\b(?:u[-‑]?frams|face registration)\b"),
@@ -394,6 +395,7 @@ TOPIC_MARKERS = {
     "jelet": r"\bjelet\b",
     "pget": r"\bpget\b",
     "jemat": r"\b(?:wbjemat|jemat)\b",
+    "admission": r"\b(?:admissions?|addmissions?)\b",
     "hostel": r"\bhostels?\b",
     "registration": r"\bregistration\s+(?:portal|process|deadline|closing|closure)\b",
     "scholarship": r"\bscholarships?\b",
@@ -451,6 +453,21 @@ def explicitly_changes_notice_topic(question, active_notice):
                 if re.search(pattern, q)}
     active_topics = {name for name, pattern in TOPIC_MARKERS.items()
                      if re.search(pattern, active_text)}
+    # For admission-vs-hostel routing, the *notice title* establishes the
+    # active subject. An incidental "admission" in a hostel notice's summary
+    # must not make a new admission-documents query look like a follow-up.
+    # Named entrance-exam and counselling titles are also admission subjects.
+    if "admission" in q_topics and not re.search(
+        r"\b(?:this|that|same)\s+(?:notice|circular)\b|\b(?:its|of\s+it)\b", q
+    ):
+        title = " ".join(str(v or "") for v in (
+            active_notice.get("title"), data.get("title")
+        )).casefold()
+        if not re.search(
+            r"\b(?:admissions?|allott?ed|counsell?ing|"
+            r"wbjeeb?|jelet|jeca|jemat|pget|cet)\b", title
+        ):
+            return True
     return any(name not in active_topics for name in q_topics)
 
 
