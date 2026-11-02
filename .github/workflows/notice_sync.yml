@@ -3,7 +3,9 @@ name: UniAI - Automatic MAKAUT Notice Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 */3 * * *"
+    # Refresh scheduled-event ownership and move farther from the top-of-hour load.
+    # GitHub cron is best-effort; this does not guarantee on-time execution.
+    - cron: "37 */3 * * *"
 
 
 permissions:
